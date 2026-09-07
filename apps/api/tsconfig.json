@@ -1,0 +1,5 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": { "outDir": "dist", "module": "NodeNext", "moduleResolution": "NodeNext", "types": ["node"], "paths": { "@flowryn/shared": ["../../packages/shared/src/index.ts"] } },
+  "include": ["src"]
+}
