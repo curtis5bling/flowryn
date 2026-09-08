@@ -1,1 +1,1 @@
-export default { plugins: { tailwindcss: {}, autoprefixer: {} } };
+export default globalThis.process?.env.NODE_ENV === 'test' ? { plugins: {} } : { plugins: { tailwindcss: {}, autoprefixer: {} } };

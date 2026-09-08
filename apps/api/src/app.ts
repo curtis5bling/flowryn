@@ -1,7 +1,6 @@
+import { healthResponseSchema } from '@flowryn/shared';
 import cors from 'cors';
 import express from 'express';
-
-import { healthResponseSchema } from '@flowryn/shared';
 
 export const createApp = () => {
   const app = express();
