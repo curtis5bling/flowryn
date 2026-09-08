@@ -48,3 +48,99 @@ export type AuthResponse = z.infer<typeof authResponseSchema>;
 export type RegisterRequest = z.infer<typeof registerRequestSchema>;
 export type LoginRequest = z.infer<typeof loginRequestSchema>;
 export type WorkspaceRole = z.infer<typeof workspaceRoleSchema>;
+
+export const projectStatusSchema = z.enum(['active', 'archived']);
+export const taskStatusSchema = z.enum(['backlog', 'todo', 'in_progress', 'review', 'done']);
+export const taskPrioritySchema = z.enum(['low', 'medium', 'high', 'urgent']);
+export const activityEntityTypeSchema = z.enum(['project', 'task']);
+
+const mongoIdSchema = z.string().regex(/^[a-f\d]{24}$/i, 'Invalid id');
+const optionalDateSchema = z.string().datetime().optional().nullable();
+
+export const projectSchema = z.object({
+  id: z.string(),
+  workspaceId: z.string(),
+  name: z.string(),
+  description: z.string(),
+  status: projectStatusSchema,
+  color: z.string(),
+  createdBy: z.string(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+});
+
+export const taskSchema = z.object({
+  id: z.string(),
+  workspaceId: z.string(),
+  projectId: z.string(),
+  title: z.string(),
+  description: z.string(),
+  status: taskStatusSchema,
+  priority: taskPrioritySchema,
+  assigneeId: z.string().nullable(),
+  dueDate: z.string().datetime().nullable(),
+  position: z.number(),
+  createdBy: z.string(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+});
+
+export const activitySchema = z.object({
+  id: z.string(),
+  workspaceId: z.string(),
+  actorId: z.string(),
+  entityType: activityEntityTypeSchema,
+  entityId: z.string(),
+  action: z.string(),
+  metadata: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])),
+  timestamp: z.string().datetime(),
+});
+
+export const createProjectRequestSchema = z.object({
+  name: z.string().trim().min(2).max(100),
+  description: z.string().trim().max(2000).default(''),
+  color: z.string().regex(/^#[0-9a-f]{6}$/i).default('#d7674d'),
+});
+
+export const updateProjectRequestSchema = createProjectRequestSchema.partial();
+export const projectListQuerySchema = z.object({
+  status: projectStatusSchema.default('active'),
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  sort: z.enum(['createdAt', 'name', 'updatedAt']).default('updatedAt'),
+  direction: z.enum(['asc', 'desc']).default('desc'),
+});
+
+export const createTaskRequestSchema = z.object({
+  projectId: mongoIdSchema,
+  title: z.string().trim().min(1).max(200),
+  description: z.string().trim().max(5000).default(''),
+  status: taskStatusSchema.default('backlog'),
+  priority: taskPrioritySchema.default('medium'),
+  assigneeId: mongoIdSchema.optional().nullable(),
+  dueDate: optionalDateSchema,
+  position: z.number().finite().optional(),
+});
+
+export const updateTaskRequestSchema = createTaskRequestSchema.omit({ projectId: true }).partial();
+export const taskListQuerySchema = z.object({
+  status: taskStatusSchema.optional(),
+  priority: taskPrioritySchema.optional(),
+  assigneeId: mongoIdSchema.optional().nullable(),
+  dueDate: z.enum(['overdue', 'today', 'upcoming']).optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(100),
+  sort: z.enum(['position', 'createdAt', 'dueDate', 'priority']).default('position'),
+  direction: z.enum(['asc', 'desc']).default('asc'),
+});
+
+export const moveTaskRequestSchema = z.object({ status: taskStatusSchema });
+export const reorderTaskRequestSchema = z.object({ position: z.number().finite().min(0) });
+export const assignTaskRequestSchema = z.object({ assigneeId: mongoIdSchema.optional().nullable() });
+
+export type Project = z.infer<typeof projectSchema>;
+export type Task = z.infer<typeof taskSchema>;
+export type Activity = z.infer<typeof activitySchema>;
+export type ProjectStatus = z.infer<typeof projectStatusSchema>;
+export type TaskStatus = z.infer<typeof taskStatusSchema>;
+export type TaskPriority = z.infer<typeof taskPrioritySchema>;

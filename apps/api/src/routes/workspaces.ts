@@ -37,6 +37,11 @@ router.get('/:workspaceId', requireAuth, requireWorkspaceRole('owner', 'admin', 
   response.json({ workspace: { id: workspace.id, name: workspace.name, createdBy: workspace.createdBy }, role: request.workspaceMembership!.role });
 });
 
+router.get('/:workspaceId/members', requireAuth, requireWorkspaceRole('owner', 'admin', 'member'), async (request, response) => {
+  const members = await WorkspaceMemberModel.find({ workspaceId: request.params.workspaceId }).populate('userId', 'name email status').lean();
+  response.json({ members: members.filter((member) => typeof member.userId === 'object' && member.userId !== null && (member.userId as { status?: string }).status === 'active').map((member) => ({ user: member.userId, role: member.role })) });
+});
+
 router.post(
   '/:workspaceId/members',
   requireAuth,

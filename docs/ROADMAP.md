@@ -6,10 +6,10 @@
 - [x] Local MongoDB and Redis services
 - [x] TypeScript, ESLint, Prettier, and Vitest
 - [x] Identity, rotating cookie sessions, workspaces, membership roles, and tenant authorization
+- [x] Projects, task boards, filtering, ordering, assignment, and activity tracking
 
 ## Next
 
-- [ ] Workstream and task persistence with Mongoose models
 - [ ] Workflow builder with trigger, condition, and action nodes
 - [ ] Redis-backed job execution and activity history
 
