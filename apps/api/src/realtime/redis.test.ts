@@ -14,6 +14,7 @@ class FakeRedis extends EventEmitter {
   ping = vi.fn(async () => 'PONG');
   publish = vi.fn(async (channel: string, message: string) => { for (const client of state.clients) if (client.channels.has(channel)) client.emit('message', channel, message); return 1; });
   eval = vi.fn(async (...args: unknown[]): Promise<unknown> => { void args; return [[], []]; });
+  zrem = vi.fn(async () => 1);
   quit = vi.fn(async () => { this.status = 'end'; return 'OK'; });
   disconnect = vi.fn(() => { this.status = 'end'; });
 }
@@ -105,4 +106,15 @@ describe('Redis transport', () => {
     await expect(transport.presence('a'.repeat(24))).rejects.toThrow();
     await transport.close();
   });
+});
+
+it('validates the leased participant snapshot and removes its registration on shutdown', async () => {
+  const transport = new RedisCoordinationTransport('redis://localhost'); await transport.start();
+  const publisher = state.clients[0]!;
+  publisher.eval.mockResolvedValueOnce([transport.instanceId]);
+  expect(await transport.participants()).toEqual([transport.instanceId]);
+  publisher.eval.mockResolvedValueOnce(['invalid-instance']);
+  await expect(transport.participants()).rejects.toThrow();
+  await transport.close();
+  expect(publisher.zrem).toHaveBeenCalledWith('flowryn:api-instances:v2', transport.instanceId);
 });

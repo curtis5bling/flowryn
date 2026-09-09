@@ -12,13 +12,22 @@ export const presenceEntriesSchema = z.array(z.object({ workspaceId: id, userId:
 export type PresenceEntry = z.infer<typeof presenceEntriesSchema>[number];
 export const presenceStateSchema = z.object({ users: z.array(id), lastSeen: z.record(id, z.number().int().nonnegative()) }).strict();
 export type PresenceState = z.infer<typeof presenceStateSchema>;
-export const coordinationMessageSchema = z.object({ eventId: z.string().uuid(), change: authorizationChangeSchema }).strict();
+export const coordinationMessageSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('revoke'), eventId: z.string().uuid(), sourceId: z.string().uuid(), change: authorizationChangeSchema }).strict(),
+  z.object({ type: z.literal('ack'), eventId: z.string().uuid(), instanceId: z.string().uuid() }).strict(),
+]);
 export const coordinationLog = (event: string) => console.info(JSON.stringify({ service: 'realtime', event }));
 export class CoordinationUnavailable extends Error {
   constructor() { super('Real-time coordination unavailable'); }
 }
+export class RevocationIncomplete extends CoordinationUnavailable {
+  readonly code = 'REVOCATION_INCOMPLETE';
+  constructor() { super(); this.message = 'Cluster revocation could not be confirmed'; }
+}
 
 export interface CoordinationTransport {
+  readonly instanceId: string;
+  participants(): Promise<string[]>;
   adapter?: ReturnType<typeof createAdapter>;
   available: boolean;
   onMessage(listener: (message: string) => void): () => void;
@@ -30,17 +39,20 @@ export interface CoordinationTransport {
 }
 
 export class Coordination {
-  readonly instanceId = randomUUID();
+  get instanceId() { return this.transport.instanceId; }
   private healthy: boolean;
   private closed = false;
   private closing?: Promise<void>;
   private previous: PresenceEntry[] = [];
   private writes: Promise<void> = Promise.resolve();
-  private readonly received = new Set<string>();
+  private readonly received = new Map<string, Promise<void>>();
+  private readonly released = new Set<string>();
+  private readonly pending = new Map<string, { waiting: Set<string>; resolve: () => void; reject: (error: Error) => void }>();
   private readonly listeners = new Set<(change: Change) => Promise<void>>();
+  private readonly confirmed = new Set<(change: Change) => void>();
   private readonly healthListeners = new Set<(available: boolean) => void>();
   private readonly cleanup: Array<() => void>;
-  constructor(readonly transport: CoordinationTransport) {
+  constructor(readonly transport: CoordinationTransport, private readonly ackTimeoutMs = 3000) {
     this.healthy = transport.available;
     this.cleanup = [transport.onHealth((healthy) => this.setHealth(healthy)), transport.onMessage((raw) => {
       void this.receive(raw).catch(() => this.fail());
@@ -51,6 +63,7 @@ export class Coordination {
   private setHealth(healthy: boolean) {
     if (this.closed || this.healthy === healthy) return;
     this.healthy = healthy;
+    if (!healthy) this.pending.forEach((operation) => operation.reject(new RevocationIncomplete()));
     coordinationLog(healthy ? 'coordination_recovered' : 'coordination_unavailable');
     this.healthListeners.forEach((listener) => listener(healthy));
   }
@@ -58,23 +71,51 @@ export class Coordination {
   assertAvailable() { if (!this.available) throw new CoordinationUnavailable(); }
   onHealth(listener: (available: boolean) => void) { this.healthListeners.add(listener); return () => { this.healthListeners.delete(listener); }; }
   onChange(listener: (change: Change) => Promise<void>) { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
+  onConfirmed(listener: (change: Change) => void) { this.confirmed.add(listener); return () => { this.confirmed.delete(listener); }; }
   private async receive(raw: string) {
     let input: unknown;
     try { input = JSON.parse(raw); } catch { coordinationLog('invalid_coordination_payload'); return; }
     const parsed = coordinationMessageSchema.safeParse(input);
     if (!parsed.success) { coordinationLog('invalid_coordination_payload'); return; }
-    if (this.received.has(parsed.data.eventId)) return;
-    this.received.add(parsed.data.eventId);
-    if (this.received.size > 10000) this.received.delete(this.received.values().next().value!);
-    await Promise.all([...this.listeners].map((listener) => listener(parsed.data.change)));
+    const message = parsed.data;
+    if (message.type === 'ack') {
+      const operation = this.pending.get(message.eventId);
+      operation?.waiting.delete(message.instanceId);
+      if (operation?.waiting.size === 0) operation.resolve();
+      return;
+    }
+    if (message.sourceId === this.instanceId) return;
+    let enforcement = this.received.get(message.eventId);
+    if (!enforcement) {
+      // Calling each listener starts quarantine synchronously before any await.
+      enforcement = Promise.all([...this.listeners].map((listener) => listener(message.change))).then(() => {});
+      this.received.set(message.eventId, enforcement);
+      if (this.received.size > 10000) { const oldest = this.received.keys().next().value!; this.received.delete(oldest); this.released.delete(oldest); }
+    }
+    await enforcement;
+    await this.transport.publish(JSON.stringify({ type: 'ack', eventId: message.eventId, instanceId: this.instanceId }));
+    if (!this.released.has(message.eventId)) {
+      this.released.add(message.eventId);
+      this.confirmed.forEach((listener) => listener(message.change));
+    }
   }
   async publish(change: Change) {
-    this.assertAvailable();
-    const message = coordinationMessageSchema.parse({ eventId: randomUUID(), change });
-    this.received.add(message.eventId); // Local application is awaited by the caller.
-    if (this.received.size > 10000) this.received.delete(this.received.values().next().value!);
-    try { await this.transport.publish(JSON.stringify(message)); }
-    catch { this.fail(); throw new CoordinationUnavailable(); }
+    const message = coordinationMessageSchema.parse({ type: 'revoke', eventId: randomUUID(), sourceId: this.instanceId, change });
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      this.assertAvailable();
+      const waiting = new Set(z.array(z.string().uuid()).parse(await this.transport.participants()));
+      if (!waiting.delete(this.instanceId)) throw new RevocationIncomplete();
+      const acknowledged = new Promise<void>((resolve, reject) => {
+        this.pending.set(message.eventId, { waiting, resolve, reject });
+        timeout = setTimeout(() => reject(new RevocationIncomplete()), this.ackTimeoutMs);
+        if (!waiting.size) resolve();
+      });
+      await Promise.all([acknowledged, this.transport.publish(JSON.stringify(message))]);
+    } catch {
+      coordinationLog('revocation_unconfirmed');
+      throw new RevocationIncomplete();
+    } finally { clearTimeout(timeout); this.pending.delete(message.eventId); }
   }
   writePresence(entries: PresenceEntry[]) {
     const current = presenceEntriesSchema.parse(entries);
@@ -102,8 +143,10 @@ export class Coordination {
       catch { coordinationLog('presence_cleanup_deferred_to_lease'); }
     }
     this.closed = true;
+    this.pending.forEach((operation) => operation.reject(new RevocationIncomplete()));
     this.cleanup.forEach((cleanup) => cleanup());
     this.listeners.clear();
+    this.confirmed.clear();
     this.healthListeners.clear();
     await this.transport.close();
   }
@@ -113,15 +156,17 @@ export class Coordination {
 export class MemoryCoordinationNetwork {
   private snapshots = new Map<string, { entries: PresenceEntry[]; expiresAt: number }>();
   private history = new Map<string, Record<string, number>>();
-  private peers = new Set<{ receive: (raw: string) => void; healthy: boolean }>();
+  private peers = new Set<{ instanceId: string; receive: (raw: string) => void; healthy: boolean }>();
   constructor(private readonly now: () => number = Date.now) {}
   connect(): CoordinationTransport & { setAvailable(healthy: boolean): void } {
     const messages = new Set<(raw: string) => void>();
     const health = new Set<(healthy: boolean) => void>();
-    const peer = { receive: (raw: string) => messages.forEach((listener) => listener(raw)), healthy: true };
+    const peer = { instanceId: randomUUID(), receive: (raw: string) => messages.forEach((listener) => listener(raw)), healthy: true };
     this.peers.add(peer);
     const check = () => { if (!peer.healthy) throw new CoordinationUnavailable(); };
     return {
+      instanceId: peer.instanceId,
+      participants: async () => { check(); return [...this.peers].filter((target) => target.healthy).map((target) => target.instanceId); },
       get available() { return peer.healthy; },
       setAvailable: (healthy) => { peer.healthy = healthy; health.forEach((listener) => listener(healthy)); },
       onMessage: (listener) => { messages.add(listener); return () => { messages.delete(listener); }; },

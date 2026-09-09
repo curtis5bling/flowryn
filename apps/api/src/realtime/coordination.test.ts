@@ -18,14 +18,14 @@ describe('coordination abstraction', () => {
     const listener = vi.fn(async () => {});
     b.onChange(listener);
     const send = vi.spyOn(transportB, 'publish');
-    const message = JSON.stringify({ eventId: randomUUID(), change: { kind: 'membership', userId, workspaceId } });
+    const message = JSON.stringify({ type: 'revoke', sourceId: a.instanceId, eventId: randomUUID(), change: { kind: 'membership', userId, workspaceId } });
     await transportA.publish(message);
     await transportA.publish(message);
-    await transportA.publish(JSON.stringify({ eventId: randomUUID(), change: { kind: 'user', userId, token: 'secret' } }));
+    await transportA.publish(JSON.stringify({ type: 'revoke', sourceId: a.instanceId, eventId: randomUUID(), change: { kind: 'user', userId, token: 'secret' } }));
     await transportA.publish('not-json');
     expect(listener).toHaveBeenCalledTimes(1);
     expect(listener).toHaveBeenCalledWith({ kind: 'membership', userId, workspaceId });
-    expect(send).not.toHaveBeenCalled();
+    expect(send.mock.calls.every(([raw]) => JSON.parse(raw).type === 'ack')).toBe(true);
     await a.close(); await b.close();
   });
 
@@ -59,7 +59,7 @@ describe('coordination abstraction', () => {
     await expect(coordination.presence(workspaceId)).rejects.toBeInstanceOf(CoordinationUnavailable);
     transport.setAvailable(true);
     transport.setAvailable(true);
-    await transport.publish(JSON.stringify({ eventId: randomUUID(), change: { kind: 'user', userId } }));
+    await transport.publish(JSON.stringify({ type: 'revoke', sourceId: randomUUID(), eventId: randomUUID(), change: { kind: 'user', userId } }));
     expect(changes).toHaveBeenCalledTimes(1);
     expect(health.mock.calls).toEqual([[false], [true]]);
     await coordination.close(); await coordination.close();
@@ -80,4 +80,26 @@ describe('coordination abstraction', () => {
     vi.stubEnv('REALTIME_COORDINATION', 'memory');
     await createMemoryCoordination().close();
   });
+});
+
+it('waits for enforcement, safely repeats requests, and fails on missing acknowledgements', async () => {
+  const network = new MemoryCoordinationNetwork();
+  const ta = network.connect(); const tb = network.connect();
+  const a = new Coordination(ta, 250); const b = new Coordination(tb);
+  let release!: () => void;
+  const delayed = new Promise<void>((resolve) => { release = resolve; });
+  const enforce = vi.fn(() => delayed);
+  b.onChange(enforce);
+  const send = vi.spyOn(ta, 'publish');
+  let done = false;
+  const operation = a.publish({ kind: 'membership', userId, workspaceId }).then(() => { done = true; });
+  await vi.waitFor(() => expect(enforce).toHaveBeenCalledTimes(1));
+  expect(done).toBe(false);
+  await ta.publish(send.mock.calls[0]![0]);
+  expect(enforce).toHaveBeenCalledTimes(1);
+  release(); await operation;
+  expect(done).toBe(true);
+  vi.spyOn(tb, 'publish').mockResolvedValue(undefined);
+  await expect(a.publish({ kind: 'user', userId })).rejects.toThrow('Cluster revocation could not be confirmed');
+  await a.close(); await b.close();
 });

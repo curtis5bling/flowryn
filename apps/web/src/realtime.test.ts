@@ -98,3 +98,84 @@ describe('real-time lifecycle', () => {
     cache.clear();
   });
 });
+
+it('recovers an outage spanning token expiration and restores rooms and REST state exactly once', async () => {
+  vi.useFakeTimers();
+  const socket = new FakeSocket();
+  const connect = vi.spyOn(socket, 'connect').mockImplementation(() => socket);
+  const cache = new QueryClient(); const invalidate = vi.spyOn(cache, 'invalidateQueries');
+  const state = vi.fn();
+  const fetchMock = vi.fn().mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({ ok: false }).mockResolvedValueOnce({ ok: true });
+  vi.stubGlobal('fetch', fetchMock);
+  const cleanup = bindRealtime(socket as unknown as Socket, 'workspace', 'project', cache, state);
+  socket.fire('connect'); await vi.advanceTimersByTimeAsync(0);
+  socket.fire('disconnect', 'io server disconnect'); await vi.advanceTimersByTimeAsync(0);
+  socket.fire('connect_error', { data: { code: 'UNAVAILABLE' } });
+  await vi.advanceTimersByTimeAsync(2000);
+  socket.fire('connect_error', { data: { code: 'UNAVAILABLE' } });
+  // Advance beyond the signed access token lifetime while Redis remains unavailable.
+  await vi.advanceTimersByTimeAsync(16 * 60 * 1000);
+  socket.fire('connect_error', new Error('Authentication required'));
+  socket.fire('connect_error', new Error('Authentication required'));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(fetchMock).toHaveBeenCalledTimes(3);
+  expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/refresh'))).toHaveLength(1);
+  socket.fire('connect'); await vi.advanceTimersByTimeAsync(0);
+  expect(state).toHaveBeenLastCalledWith('connected');
+  expect(socket.joins).toEqual(['workspace:join:workspace', 'project:join:project', 'workspace:join:workspace', 'project:join:project']);
+  expect(invalidate.mock.calls.filter(([filter]) => filter?.queryKey?.[0] === 'presence')).toHaveLength(2);
+  expect(invalidate).toHaveBeenCalledTimes(14);
+  expect([...socket.listeners.values()].every((listeners) => listeners.size === 1)).toBe(true);
+  expect(connect).toHaveBeenCalledTimes(5);
+  cleanup(); cache.clear();
+  expect([...socket.listeners.values()].every((listeners) => listeners.size === 0)).toBe(true);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it('stops after a terminal refresh failure', async () => {
+  vi.useFakeTimers();
+  const socket = new FakeSocket();
+  const connect = vi.spyOn(socket, 'connect').mockImplementation(() => socket);
+  const cache = new QueryClient(); const state = vi.fn();
+  const fetchMock = vi.fn().mockResolvedValue({ ok: false }); vi.stubGlobal('fetch', fetchMock);
+  const cleanup = bindRealtime(socket as unknown as Socket, 'workspace', undefined, cache, state);
+  socket.fire('connect_error', new Error('Authentication required'));
+  await vi.advanceTimersByTimeAsync(0);
+  socket.fire('connect_error', { data: { code: 'UNAVAILABLE' } });
+  socket.fire('connect_error', new Error('Authentication required'));
+  await vi.advanceTimersByTimeAsync(10000);
+  expect(connect).toHaveBeenCalledTimes(1); expect(fetchMock).toHaveBeenCalledTimes(2);
+  expect(state).toHaveBeenLastCalledWith('disconnected'); cleanup(); cache.clear();
+});
+
+it('does not reconnect when logout disposes a pending recovery', async () => {
+  vi.useFakeTimers();
+  const socket = new FakeSocket(); const connect = vi.spyOn(socket, 'connect').mockImplementation(() => socket);
+  let release!: (response: { ok: boolean }) => void;
+  vi.stubGlobal('fetch', vi.fn(() => new Promise((resolve) => { release = resolve; })));
+  const cache = new QueryClient();
+  const cleanup = bindRealtime(socket as unknown as Socket, 'workspace', undefined, cache, vi.fn());
+  socket.fire('connect_error', new Error('Authentication required'));
+  cleanup(); release({ ok: true }); await vi.advanceTimersByTimeAsync(10000);
+  expect(connect).toHaveBeenCalledTimes(1);
+  expect([...socket.listeners.values()].every((listeners) => listeners.size === 0)).toBe(true);
+  cache.clear(); expect(vi.getTimerCount()).toBe(0);
+});
+
+it('retries temporary refresh failures but stops a rejected post-refresh authentication cycle', async () => {
+  vi.useFakeTimers();
+  const socket = new FakeSocket(); const connect = vi.spyOn(socket, 'connect').mockImplementation(() => socket);
+  const cache = new QueryClient(); const state = vi.fn();
+  const fetchMock = vi.fn().mockResolvedValueOnce({ ok: false, status: 503 }).mockResolvedValueOnce({ ok: false, status: 401 }).mockResolvedValueOnce({ ok: true });
+  vi.stubGlobal('fetch', fetchMock);
+  const cleanup = bindRealtime(socket as unknown as Socket, 'workspace', undefined, cache, state);
+  socket.fire('connect_error', new Error('Authentication required')); await vi.advanceTimersByTimeAsync(0);
+  expect(state).toHaveBeenLastCalledWith('reconnecting');
+  await vi.advanceTimersByTimeAsync(2000);
+  socket.fire('connect_error', new Error('Authentication required')); await vi.advanceTimersByTimeAsync(0);
+  expect(fetchMock).toHaveBeenCalledTimes(3);
+  socket.fire('connect_error', new Error('Authentication required')); await vi.advanceTimersByTimeAsync(10000);
+  expect(state).toHaveBeenLastCalledWith('disconnected');
+  expect(connect).toHaveBeenCalledTimes(3); expect(fetchMock).toHaveBeenCalledTimes(3);
+  cleanup(); cache.clear();
+});
