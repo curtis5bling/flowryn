@@ -6,6 +6,7 @@ import { issueTokens, revokeRefreshToken, rotateRefreshToken } from '../auth/tok
 import { requireAuth } from '../middleware/auth.js';
 import { validateBody } from '../middleware/validation.js';
 import { UserModel } from '../models/User.js';
+import { CoordinationUnavailable } from '../realtime/coordination.js';
 
 const router = Router();
 const accessCookie = 'accessToken';
@@ -61,7 +62,8 @@ router.post('/refresh', async (request, response) => {
     const tokens = await rotateRefreshToken(request.cookies?.[refreshCookie]);
     setAuthCookies(response, tokens);
     response.json({ ok: true });
-  } catch {
+  } catch (error) {
+    if (error instanceof CoordinationUnavailable) { response.status(503).json({ error: error.message }); return; }
     response.status(401).json({ error: 'Refresh token expired or invalid' });
   }
 });

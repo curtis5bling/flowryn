@@ -3,6 +3,8 @@ import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import express, { type ErrorRequestHandler } from 'express';
 
+import { CoordinationUnavailable } from './realtime/coordination.js';
+import { realtimeAvailable } from './realtime/gateway.js';
 import authRouter from './routes/auth.js';
 import collaborationRouter from './routes/collaboration.js';
 import projectsRouter from './routes/projects.js';
@@ -19,6 +21,7 @@ export const createApp = () => {
   });
   app.use(cookieParser());
   app.use(express.json());
+  app.get('/api/ready', (_request, response) => { const ready = realtimeAvailable(); response.status(ready ? 200 : 503).json({ ready }); });
   app.get('/api/health', (_request, response) => {
     response.json(
       healthResponseSchema.parse({ status: 'ok', service: 'flowryn-api', timestamp: new Date().toISOString() }),
@@ -30,6 +33,7 @@ export const createApp = () => {
   app.use('/api/workspaces', workspacesRouter);
   const errorHandler: ErrorRequestHandler = (error, _request, response, next) => {
     void next;
+    if (error instanceof CoordinationUnavailable) { response.status(503).json({ error: error.message }); return; }
     console.error(error);
     response.status(500).json({ error: process.env.NODE_ENV === 'production' ? 'Internal server error' : String(error?.message ?? error) });
   };
