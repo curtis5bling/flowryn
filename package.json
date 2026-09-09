@@ -3,7 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "description": "Intelligent Work Orchestration",
-  "workspaces": ["apps/*", "packages/*"],
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
     "build": "npm run build -w @flowryn/shared && npm run build -w @flowryn/api && npm run build -w @flowryn/web",
     "dev": "concurrently \"npm run dev -w @flowryn/api\" \"npm run dev -w @flowryn/web\"",
@@ -26,6 +29,6 @@
     "prettier": "^3.4.2",
     "typescript": "^5.7.2",
     "typescript-eslint": "^8.18.0",
-    "vitest": "^2.1.8"
+    "vitest": "^4.1.11"
   }
 }

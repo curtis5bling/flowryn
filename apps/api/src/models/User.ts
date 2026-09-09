@@ -1,5 +1,10 @@
 import { Schema, model } from 'mongoose';
 
+import { installRevocationHooks } from '../auth/model-revocation.js';
+import { onAuthorizationChange } from '../auth/revocation.js';
+
+import { AuthSessionModel } from './AuthSession.js';
+
 export type UserStatus = 'active' | 'suspended';
 
 const userSchema = new Schema(
@@ -12,4 +17,11 @@ const userSchema = new Schema(
   { timestamps: true },
 );
 
+installRevocationHooks(userSchema, 'user');
 export const UserModel = model('User', userSchema);
+// Session invalidation also applies when no gateway is running.
+onAuthorizationChange(async (change) => {
+  if (change.kind === 'user' && !await UserModel.exists({ _id: change.userId, status: 'active' })) {
+    await AuthSessionModel.updateMany({ userId: change.userId }, { revokedAt: new Date() });
+  }
+});
