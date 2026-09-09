@@ -1,5 +1,6 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": { "rootDir": "src", "paths": { "@flowryn/shared": ["../../packages/shared/dist/index.d.ts"] } },
-  "include": ["src"]
+  "include": ["src"],
+  "exclude": ["src/**/*.test.ts"]
 }

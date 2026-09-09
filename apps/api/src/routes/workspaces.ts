@@ -10,7 +10,7 @@ import { WorkspaceMemberModel } from '../models/WorkspaceMember.js';
 const router = Router();
 
 router.get('/', requireAuth, async (request, response) => {
-  const memberships = await WorkspaceMemberModel.find({ userId: request.auth!.userId }).select('workspaceId role');
+  const memberships = await WorkspaceMemberModel.find({ userId: request.auth!.userId, disabled: { $ne: true } }).select('workspaceId role');
   const workspaces = await WorkspaceModel.find({ _id: { $in: memberships.map((membership) => membership.workspaceId) } }).select('name');
   response.json({
     workspaces: workspaces.map((workspace) => ({
@@ -38,7 +38,7 @@ router.get('/:workspaceId', requireAuth, requireWorkspaceRole('owner', 'admin', 
 });
 
 router.get('/:workspaceId/members', requireAuth, requireWorkspaceRole('owner', 'admin', 'member'), async (request, response) => {
-  const members = await WorkspaceMemberModel.find({ workspaceId: request.params.workspaceId }).populate('userId', 'name email status').lean();
+  const members = await WorkspaceMemberModel.find({ workspaceId: request.params.workspaceId, disabled: { $ne: true } }).populate('userId', 'name email status').lean();
   response.json({ members: members.filter((member) => typeof member.userId === 'object' && member.userId !== null && (member.userId as { status?: string }).status === 'active').map((member) => ({ user: member.userId, role: member.role })) });
 });
 

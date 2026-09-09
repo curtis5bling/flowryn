@@ -15,10 +15,13 @@ import { Types } from 'mongoose';
 import { requireAuth, requireWorkspaceRole } from '../middleware/auth.js';
 import { validateBody } from '../middleware/validation.js';
 import { ActivityModel } from '../models/Activity.js';
+import { CommentModel } from '../models/Comment.js';
 import { ProjectModel } from '../models/Project.js';
 import { TaskModel } from '../models/Task.js';
 import { UserModel } from '../models/User.js';
 import { WorkspaceMemberModel } from '../models/WorkspaceMember.js';
+import { publishRealtimeEvent } from '../realtime/gateway.js';
+import { createNotification } from '../realtime/notifications.js';
 
 const router = Router();
 
@@ -45,7 +48,7 @@ const ensureAssignee = async (workspaceId: string, assigneeId: string | null | u
   if (assigneeId === undefined || assigneeId === null) return true;
   if (invalidId(assigneeId)) return false;
   const [membership, user] = await Promise.all([
-    WorkspaceMemberModel.exists({ workspaceId, userId: assigneeId }),
+    WorkspaceMemberModel.exists({ workspaceId, userId: assigneeId, disabled: { $ne: true } }),
     UserModel.exists({ _id: assigneeId, status: 'active' }),
   ]);
   return Boolean(membership && user);
@@ -83,6 +86,7 @@ router.post(
     const workspaceId = request.params.workspaceId as string;
     const project = await ProjectModel.create({ ...request.body, workspaceId, createdBy: request.auth!.userId });
     await recordActivity(workspaceId, request.auth!.userId, 'project', project.id, 'project.created', { name: project.name });
+    publishRealtimeEvent({ workspaceId, projectId: project.id, entityId: project.id, actorId: request.auth!.userId, type: 'project.created', payload: { project: serialize(project.toObject()) } });
     return response.status(201).json({ project: serialize(project.toObject()) });
   },
 );
@@ -108,6 +112,7 @@ router.patch(
     const project = await ProjectModel.findOneAndUpdate({ _id: request.params.projectId, workspaceId }, { $set: request.body }, { new: true, runValidators: true });
     if (!project) return response.status(404).json({ error: 'Project not found' });
     await recordActivity(workspaceId, request.auth!.userId, 'project', project.id, 'project.updated', { fields: Object.keys(request.body) });
+    publishRealtimeEvent({ workspaceId, projectId: project.id, entityId: project.id, actorId: request.auth!.userId, type: 'project.updated', payload: { project: serialize(project.toObject()) } });
     return response.json({ project: serialize(project.toObject()) });
   },
 );
@@ -121,6 +126,9 @@ router.delete(
     const project = await ProjectModel.findOneAndUpdate({ _id: request.params.projectId, workspaceId }, { status: 'archived' }, { new: true });
     if (!project) return response.status(404).json({ error: 'Project not found' });
     await recordActivity(workspaceId, request.auth!.userId, 'project', project.id, 'project.archived');
+    publishRealtimeEvent({ workspaceId, projectId: project.id, entityId: project.id, actorId: request.auth!.userId, type: 'project.archived', payload: { project: serialize(project.toObject()) } });
+    const recipients = await TaskModel.find({ workspaceId, projectId: project.id, assigneeId: { $ne: null } }).distinct('assigneeId');
+    await Promise.all(recipients.map((recipientId) => createNotification({ workspaceId, recipientId: String(recipientId), actorId: request.auth!.userId, type: 'project_archived', entityType: 'project', entityId: project.id, title: `Project archived: ${project.name}` })));
     return response.json({ project: serialize(project.toObject()) });
   },
 );
@@ -179,6 +187,8 @@ router.post(
     const position = typeof body.position === 'number' ? body.position : ((await TaskModel.find({ workspaceId, projectId, status: body.status }).sort({ position: -1 }).limit(1).lean())[0]?.position ?? -1) + 1;
     const task = await TaskModel.create({ ...body, workspaceId, projectId, position, createdBy: request.auth!.userId });
     await recordActivity(workspaceId, request.auth!.userId, 'task', task.id, 'task.created', { projectId, title: task.title });
+    publishRealtimeEvent({ workspaceId, projectId, entityId: task.id, actorId: request.auth!.userId, type: 'task.created', payload: { task: serialize(task.toObject()) } });
+    if (task.assigneeId) await createNotification({ workspaceId, recipientId: task.assigneeId.toString(), actorId: request.auth!.userId, type: 'task_assigned', entityType: 'task', entityId: task.id, title: `You were assigned ${task.title}` });
     return response.status(201).json({ task: serialize(task.toObject()) });
   },
 );
@@ -192,10 +202,15 @@ router.get('/:workspaceId/tasks/:taskId', requireAuth, requireWorkspaceRole('own
 router.patch('/:workspaceId/tasks/:taskId', requireAuth, requireWorkspaceRole('owner', 'admin', 'member'), validateBody(updateTaskRequestSchema), async (request, response) => {
   const workspaceId = request.params.workspaceId as string;
   const body = request.body as Record<string, unknown>;
+  const previous = await getTask(workspaceId, request.params.taskId as string);
+  if (!previous) return response.status(404).json({ error: 'Task not found' });
   if (!await ensureAssignee(workspaceId, body.assigneeId as string | null | undefined)) return response.status(400).json({ error: 'Assignee is not an active workspace member' });
   const task = await TaskModel.findOneAndUpdate({ _id: request.params.taskId, workspaceId }, { $set: body }, { new: true, runValidators: true });
   if (!task) return response.status(404).json({ error: 'Task not found' });
   await recordActivity(workspaceId, request.auth!.userId, 'task', task.id, 'task.updated', { fields: Object.keys(body) });
+  publishRealtimeEvent({ workspaceId, projectId: task.projectId.toString(), entityId: task.id, actorId: request.auth!.userId, type: 'task.updated', payload: { task: serialize(task.toObject()) } });
+  if (task.assigneeId && String(previous.assigneeId) !== String(task.assigneeId)) await createNotification({ workspaceId, recipientId: String(task.assigneeId), actorId: request.auth!.userId, type: 'task_assigned', entityType: 'task', entityId: task.id, title: `You were assigned ${task.title}` });
+  if (task.assigneeId && previous.status !== task.status) await createNotification({ workspaceId, recipientId: String(task.assigneeId), actorId: request.auth!.userId, type: 'task_status_changed', entityType: 'task', entityId: task.id, title: `Task moved to ${task.status}` });
   return response.json({ task: serialize(task.toObject()) });
 });
 
@@ -204,6 +219,8 @@ router.delete('/:workspaceId/tasks/:taskId', requireAuth, requireWorkspaceRole('
   const task = await TaskModel.findOneAndDelete({ _id: request.params.taskId, workspaceId });
   if (!task) return response.status(404).json({ error: 'Task not found' });
   await recordActivity(workspaceId, request.auth!.userId, 'task', task.id, 'task.deleted', { projectId: task.projectId.toString() });
+  await CommentModel.deleteMany({ workspaceId, taskId: task.id });
+  publishRealtimeEvent({ workspaceId, projectId: task.projectId.toString(), entityId: task.id, actorId: request.auth!.userId, type: 'task.deleted', payload: { taskId: task.id } });
   return response.status(204).send();
 });
 
@@ -218,6 +235,8 @@ router.patch('/:workspaceId/tasks/:taskId/status', requireAuth, requireWorkspace
   task.position = nextPosition;
   await task.save();
   await recordActivity(workspaceId, request.auth!.userId, 'task', task.id, 'task.moved', { fromStatus: previousStatus, toStatus: nextStatus });
+  publishRealtimeEvent({ workspaceId, projectId: task.projectId.toString(), entityId: task.id, actorId: request.auth!.userId, type: 'task.moved', payload: { task: serialize(task.toObject()) } });
+  if (task.assigneeId) await createNotification({ workspaceId, recipientId: task.assigneeId.toString(), actorId: request.auth!.userId, type: 'task_status_changed', entityType: 'task', entityId: task.id, title: `Task moved to ${nextStatus}` });
   return response.json({ task: serialize(task.toObject()) });
 });
 
@@ -225,6 +244,7 @@ router.patch('/:workspaceId/tasks/:taskId/reorder', requireAuth, requireWorkspac
   const task = await TaskModel.findOneAndUpdate({ _id: request.params.taskId, workspaceId: request.params.workspaceId }, { position: request.body.position }, { new: true });
   if (!task) return response.status(404).json({ error: 'Task not found' });
   await recordActivity(request.params.workspaceId as string, request.auth!.userId, 'task', task.id, 'task.reordered', { position: task.position });
+  publishRealtimeEvent({ workspaceId: request.params.workspaceId as string, projectId: task.projectId.toString(), entityId: task.id, actorId: request.auth!.userId, type: 'task.reordered', payload: { task: serialize(task.toObject()) } });
   return response.json({ task: serialize(task.toObject()) });
 });
 
@@ -235,6 +255,8 @@ router.patch('/:workspaceId/tasks/:taskId/assignee', requireAuth, requireWorkspa
   const task = await TaskModel.findOneAndUpdate({ _id: request.params.taskId, workspaceId }, { assigneeId: assigneeId ?? null }, { new: true });
   if (!task) return response.status(404).json({ error: 'Task not found' });
   await recordActivity(workspaceId, request.auth!.userId, 'task', task.id, assigneeId ? 'task.assigned' : 'task.unassigned', { assigneeId: assigneeId ?? null });
+  publishRealtimeEvent({ workspaceId, projectId: task.projectId.toString(), entityId: task.id, actorId: request.auth!.userId, type: 'task.assigned', payload: { task: serialize(task.toObject()) } });
+  if (assigneeId) await createNotification({ workspaceId, recipientId: assigneeId, actorId: request.auth!.userId, type: 'task_assigned', entityType: 'task', entityId: task.id, title: `You were assigned ${task.title}` });
   return response.json({ task: serialize(task.toObject()) });
 });
 

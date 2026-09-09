@@ -25,7 +25,15 @@ Workspace access is tenant-scoped: authenticated requests must have a membership
 
 ## Projects and task boards
 
-Inside an authorized workspace, owners and admins manage projects while all members can create and edit tasks. The board supports five statuses, priority and due-date filters, member assignment, task ordering, project activity history, and confirmation for archive/delete actions. Task mutations and activity feeds remain workspace-scoped; real-time updates are intentionally deferred.
+Inside an authorized workspace, owners and admins manage projects while all members can create and edit tasks. The board supports five statuses, priority and due-date filters, member assignment, task ordering, project activity history, and confirmation for archive/delete actions.
+
+## Real-time collaboration
+
+Authenticated clients receive project changes in workspace rooms, task/comment changes in project rooms, and notifications in private user rooms. Task discussions support paginated comments and author/admin moderation. Notifications track assignments, status changes, comments, and project archival. REST remains the source of truth; reconnecting clients restore room subscriptions and refresh their cached data.
+
+Set `SOCKET_ALLOWED_ORIGINS` to the comma-separated web origins permitted for HTTP and Socket.IO. Production requires a `JWT_SECRET` of at least 32 characters. Access tokens now reference a stored session; users with older tokens must sign in again. Token expiry disconnects sockets, logout revokes the corresponding session, suspension revokes all user sessions, and membership removal/disable evicts workspace and project subscriptions.
+
+Presence and revocation delivery currently run within one API process and support multiple tabs. Run a single API instance; the configured Redis service is not yet used for shared presence or cross-process socket revocation. Account and membership changes must use the Mongoose models (save/update/delete), not raw collection writes or bulk writes, to invoke the awaited authorization hooks.
 
 ## Commands
 
