@@ -5,6 +5,7 @@ export const authorizationChangeSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('user'), userId: id }).strict(),
   z.object({ kind: z.literal('membership'), userId: id, workspaceId: id }).strict(),
   z.object({ kind: z.literal('session'), userId: id, tokenId: z.string().uuid() }).strict(),
+  z.object({ kind: z.literal('project'), userId: id, workspaceId: id, projectId: id }).strict(),
 ]);
 export type Change = z.infer<typeof authorizationChangeSchema>;
 const listeners = new Set<(change: Change) => Promise<void>>();

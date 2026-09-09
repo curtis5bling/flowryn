@@ -125,6 +125,49 @@ it('reconciles a revocation missed when the publisher failed without claiming su
   const b = await connect(1, f.tokens.accessToken);
   const gone = waitEvent(b, 'disconnect');
   transports[0]!.setAvailable(false);
-  await expect(UserModel.updateOne({ _id: f.user.id }, { status: 'suspended' })).rejects.toThrow('Real-time coordination unavailable');
+  await expect(UserModel.updateOne({ _id: f.user.id }, { status: 'suspended' })).rejects.toThrow('Cluster revocation could not be confirmed');
   await gone;
 }, 15000);
+
+it('quarantines before delayed reconciliation and delivers no event after acknowledged removal', async () => {
+  const f = await fixture();
+  await WorkspaceMemberModel.create({ workspaceId: otherWorkspaceId, userId: f.user.id, role: 'member' });
+  const b = await connect(1, f.tokens.accessToken);
+  await join(b, 'workspace:join', workspaceId);
+  await join(b, 'project:join', f.project.id);
+  await join(b, 'workspace:join', otherWorkspaceId);
+  // B enforcement must not perform an exists query; the origin's decision is trusted.
+  const exists = vi.spyOn(WorkspaceMemberModel, 'exists');
+  exists.mockResolvedValueOnce(null);
+  exists.mockImplementation(() => new Promise(() => {}) as ReturnType<typeof WorkspaceMemberModel.exists>);
+  let release!: () => void;
+  const removal = new Promise<void>((resolve) => { release = resolve; });
+  const leave = vi.spyOn(gateways[1]!.sockets.sockets.get(b.id!)!, 'leave').mockImplementation(() => removal);
+  let completed = false;
+  const operation = WorkspaceMemberModel.deleteOne({ workspaceId, userId: f.user.id }).then(() => { completed = true; });
+  await vi.waitFor(() => expect(leave).toHaveBeenCalled());
+  expect(exists).toHaveBeenCalledTimes(1);
+  expect(completed).toBe(false);
+  const received = vi.fn(); b.on('task.updated', received);
+  gateways[1]!.to(`workspace:${workspaceId}:project:${f.project.id}`).emit('task.updated', { protected: true });
+  const barrier = waitEvent(b, 'review:barrier');
+  gateways[1]!.to(`workspace:${otherWorkspaceId}`).emit('review:barrier');
+  await barrier;
+  expect(completed).toBe(false);
+  release(); await operation;
+  gateways[1]!.to(`workspace:${workspaceId}:project:${f.project.id}`).emit('task.updated', { afterRemoval: true });
+  const after = waitEvent(b, 'review:after');
+  gateways[1]!.to(`workspace:${otherWorkspaceId}`).emit('review:after'); await after;
+  expect(received).not.toHaveBeenCalled();
+  expect(gateways[1]!.sockets.sockets.get(b.id!)!.rooms.has(`workspace:${otherWorkspaceId}`)).toBe(true);
+});
+
+it('retains local membership quarantine after a missing remote acknowledgement', async () => {
+  const f = await fixture(); const a = await connect(0, f.tokens.accessToken); const b = await connect(1, f.tokens.accessToken);
+  await join(a, 'workspace:join', workspaceId); await join(b, 'workspace:join', workspaceId);
+  vi.spyOn(transports[1]!, 'publish').mockResolvedValue(undefined);
+  await expect(WorkspaceMemberModel.updateOne({ workspaceId, userId: f.user.id }, { disabled: true })).rejects.toMatchObject({ code: 'REVOCATION_INCOMPLETE' });
+  await WorkspaceMemberModel.updateOne({ workspaceId, userId: f.user.id }, { disabled: false });
+  expect((await join(a, 'workspace:join', workspaceId)).ok).toBe(false);
+  expect(gateways[0]!.sockets.sockets.get(a.id!)!.rooms.has(`workspace:${workspaceId}`)).toBe(false);
+}, 10000);

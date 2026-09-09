@@ -6,8 +6,13 @@ import { z } from 'zod';
 
 import { Coordination, coordinationLog, CoordinationUnavailable, createMemoryCoordination, leaseMs, presenceEntriesSchema, presenceStateSchema, type CoordinationTransport, type PresenceEntry } from './coordination.js';
 
-const channel = 'flowryn:authorization:v1';
+const channel = 'flowryn:authorization:v2';
 const probeSchema = z.object({ probe: z.string().uuid() }).strict();
+const participantKey = 'flowryn:api-instances:v2';
+const participantScript = `local t = redis.call('TIME'); local now = tonumber(t[1])*1000+math.floor(tonumber(t[2])/1000)
+redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', now)
+if ARGV[1] ~= '' then redis.call('ZADD', KEYS[1], now+15000, ARGV[1]) end
+return redis.call('ZRANGE', KEYS[1], 0, -1)`;
 // Redis time provides one clock for leases and monotonically increasing last-seen.
 export const writePresenceScript = `
 local time = redis.call('TIME')
@@ -32,6 +37,7 @@ redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', now)
 return {redis.call('ZRANGE', KEYS[1], 0, -1), redis.call('ZRANGE', KEYS[2], 0, -1, 'WITHSCORES')}`;
 
 export class RedisCoordinationTransport implements CoordinationTransport {
+  readonly instanceId = randomUUID();
   readonly publisher: Redis;
   readonly subscriber: Redis;
   readonly adapter: ReturnType<typeof createAdapter>;
@@ -115,6 +121,7 @@ export class RedisCoordinationTransport implements CoordinationTransport {
       });
       try {
         await Promise.all([received, this.publisher.publish(channel, JSON.stringify({ probe }))]);
+        await this.publisher.eval(participantScript, 1, participantKey, this.instanceId);
         this.setHealth(true);
       } finally { clearTimeout(timeout); this.probes.delete(probe); }
     })().finally(() => { this.probing = undefined; });
@@ -123,6 +130,10 @@ export class RedisCoordinationTransport implements CoordinationTransport {
   async publish(message: string) {
     if (!this.available) throw new CoordinationUnavailable();
     await this.publisher.publish(channel, message);
+  }
+  async participants() {
+    if (!this.available) throw new CoordinationUnavailable();
+    return z.array(z.string().uuid()).parse(await this.publisher.eval(participantScript, 1, participantKey, ''));
   }
   async writePresence(instanceId: string, previous: PresenceEntry[], current: PresenceEntry[]) {
     if (!this.available) throw new CoordinationUnavailable();
@@ -158,6 +169,7 @@ export class RedisCoordinationTransport implements CoordinationTransport {
     // Release a pending round-trip before closing the connections.
     this.probes.forEach((resolve) => resolve());
     await this.probing?.catch(() => {});
+    try { if (this.publisher.status === 'ready') await this.publisher.zrem(participantKey, this.instanceId); } catch { coordinationLog('participant_cleanup_deferred_to_lease'); }
     await Promise.all([this.publisher, this.subscriber].map(async (client) => {
       try { if (client.status === 'ready') await client.quit(); } catch { /* Force-close below. */ }
       client.disconnect();

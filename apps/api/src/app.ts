@@ -3,7 +3,7 @@ import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import express, { type ErrorRequestHandler } from 'express';
 
-import { CoordinationUnavailable } from './realtime/coordination.js';
+import { CoordinationUnavailable, RevocationIncomplete } from './realtime/coordination.js';
 import { realtimeAvailable } from './realtime/gateway.js';
 import authRouter from './routes/auth.js';
 import collaborationRouter from './routes/collaboration.js';
@@ -33,7 +33,7 @@ export const createApp = () => {
   app.use('/api/workspaces', workspacesRouter);
   const errorHandler: ErrorRequestHandler = (error, _request, response, next) => {
     void next;
-    if (error instanceof CoordinationUnavailable) { response.status(503).json({ error: error.message }); return; }
+    if (error instanceof CoordinationUnavailable) { response.status(503).json({ error: error.message, code: error instanceof RevocationIncomplete ? error.code : 'COORDINATION_UNAVAILABLE' }); return; }
     console.error(error);
     response.status(500).json({ error: process.env.NODE_ENV === 'production' ? 'Internal server error' : String(error?.message ?? error) });
   };
