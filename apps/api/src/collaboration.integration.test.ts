@@ -158,7 +158,7 @@ describe('collaboration boundaries', () => {
     const disconnected = tabs.map((socket) => once(socket, 'disconnect'));
     await UserModel.findOneAndUpdate({ _id: f.member.id }, { status: 'suspended' });
     await Promise.all(disconnected);
-    expect(getPresence(f.workspace.id)).not.toContain(f.member.id);
+    expect(await getPresence(f.workspace.id)).not.toContain(f.member.id);
     expect(await AuthSessionModel.countDocuments({ userId: f.member.id, revokedAt: null })).toBe(0);
   });
 
@@ -166,10 +166,10 @@ describe('collaboration boundaries', () => {
     const f = await fixture();
     const tabs = await Promise.all([client(f.tokens[1].accessToken), client(f.tokens[1].accessToken)]);
     await Promise.all(tabs.map(async (socket) => { await ack(socket, 'workspace:join', f.workspace.id); await ack(socket, 'project:join', f.project.id); }));
-    expect(getPresence(f.workspace.id)).toEqual([f.member.id]);
+    expect(await getPresence(f.workspace.id)).toEqual([f.member.id]);
     if (operation === 'delete') await WorkspaceMemberModel.deleteOne({ userId: f.member.id, workspaceId: f.workspace.id });
     else await WorkspaceMemberModel.updateOne({ userId: f.member.id, workspaceId: f.workspace.id }, { disabled: true });
-    expect(getPresence(f.workspace.id)).toEqual([]);
+    expect(await getPresence(f.workspace.id)).toEqual([]);
     for (const socket of tabs) {
       expect([...gateway.sockets.sockets.get(socket.id!)!.rooms].some((room) => room.startsWith('workspace:'))).toBe(false);
       expect((await ack(socket, 'project:join', f.project.id)).ok).toBe(false);
@@ -182,14 +182,14 @@ describe('collaboration boundaries', () => {
     const second = await client(f.tokens[1].accessToken);
     await ack(first, 'workspace:join', f.workspace.id);
     await ack(second, 'workspace:join', f.workspace.id);
-    expect(getPresence(f.workspace.id)).toEqual([f.member.id]);
+    expect(await getPresence(f.workspace.id)).toEqual([f.member.id]);
     gateway.sockets.sockets.get(first.id!)!.disconnect(true);
-    expect(getPresence(f.workspace.id)).toEqual([f.member.id]);
+    expect(await getPresence(f.workspace.id)).toEqual([f.member.id]);
     gateway.sockets.sockets.get(second.id!)!.disconnect(true);
-    expect(getPresence(f.workspace.id)).toEqual([]);
+    expect(await getPresence(f.workspace.id)).toEqual([]);
     const reconnected = await client(f.tokens[1].accessToken);
     await ack(reconnected, 'workspace:join', f.workspace.id);
-    expect(getPresence(f.workspace.id)).toEqual([f.member.id]);
+    expect(await getPresence(f.workspace.id)).toEqual([f.member.id]);
   });
 
   it('does not let an in-flight room join restore membership after revocation', async () => {
@@ -207,7 +207,7 @@ describe('collaboration boundaries', () => {
     await WorkspaceMemberModel.deleteOne({ userId: f.member.id, workspaceId: f.workspace.id });
     release({ _id: new mongoose.Types.ObjectId() });
     expect((await joining).ok).toBe(false);
-    expect(getPresence(f.workspace.id)).not.toContain(f.member.id);
+    expect(await getPresence(f.workspace.id)).not.toContain(f.member.id);
   });
 
   it('disconnects a revoked session and rejects subsequent socket handshakes', async () => {

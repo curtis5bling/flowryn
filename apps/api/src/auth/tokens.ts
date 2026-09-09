@@ -54,14 +54,13 @@ export const rotateRefreshToken = async (refreshToken: string) => {
 
 export const revokeRefreshToken = async (refreshToken?: string) => {
   if (!refreshToken) return;
+  let payload: TokenPayload;
   try {
-    const payload = jwt.verify(refreshToken, jwtSecret) as TokenPayload;
-    if (payload.jti) {
-      await AuthSessionModel.updateOne({ tokenId: payload.jti }, { revokedAt: new Date() });
-      await authorizationChanged({ kind: 'session', userId: payload.sub, tokenId: payload.jti });
-    }
-  } catch {
-    // Logout is intentionally idempotent for expired or malformed cookies.
+    payload = jwt.verify(refreshToken, jwtSecret) as TokenPayload;
+  } catch { return; }
+  if (payload.jti) {
+    await AuthSessionModel.updateOne({ tokenId: payload.jti }, { revokedAt: new Date() });
+    await authorizationChanged({ kind: 'session', userId: payload.sub, tokenId: payload.jti });
   }
 };
 

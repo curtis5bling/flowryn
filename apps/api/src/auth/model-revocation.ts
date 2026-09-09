@@ -6,10 +6,9 @@ import { authorizationChanged } from './revocation.js';
 // revocation before returning the mutation to its caller.
 export const installRevocationHooks = (schema: Schema, kind: 'user' | 'membership') => {
   type Identity = { _id: unknown; userId?: unknown; workspaceId?: unknown };
-  const notify = async (document: Identity) => authorizationChanged({
-    kind, userId: String(kind === 'user' ? document._id : document.userId),
-    workspaceId: kind === 'membership' ? String(document.workspaceId) : undefined,
-  });
+  const notify = async (document: Identity) => authorizationChanged(kind === 'user'
+    ? { kind, userId: String(document._id) }
+    : { kind, userId: String(document.userId), workspaceId: String(document.workspaceId) });
   const affected = new WeakMap<object, Identity[]>();
   const operations = ['updateOne', 'updateMany', 'findOneAndUpdate', 'replaceOne', 'findOneAndReplace', 'deleteOne', 'deleteMany', 'findOneAndDelete'] as const;
   for (const operation of operations) {

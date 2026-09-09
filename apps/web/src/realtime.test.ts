@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { bindRealtime } from './realtime';
 
-afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 class FakeSocket {
   listeners = new Map<string, Set<(...args: unknown[]) => void>>();
@@ -19,6 +19,27 @@ class FakeSocket {
 }
 
 describe('real-time lifecycle', () => {
+  it('retries temporary coordination failures once per interval and clears retries on cleanup', async () => {
+    vi.useFakeTimers();
+    const socket = new FakeSocket();
+    const cache = new QueryClient();
+    const state = vi.fn();
+    const connect = vi.spyOn(socket, 'connect');
+    const cleanup = bindRealtime(socket as unknown as Socket, 'workspace', undefined, cache, state);
+    await vi.advanceTimersByTimeAsync(0);
+    socket.fire('connect_error', { data: { code: 'UNAVAILABLE' } });
+    socket.fire('connect_error', { data: { code: 'UNAVAILABLE' } });
+    expect(state).toHaveBeenLastCalledWith('reconnecting');
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(connect).toHaveBeenCalledTimes(2);
+    expect(state).toHaveBeenLastCalledWith('connected');
+    socket.fire('connect_error', { data: { code: 'UNAVAILABLE' } });
+    cleanup();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(connect).toHaveBeenCalledTimes(2);
+    cache.clear();
+  });
+
   it('refreshes expired credentials before restoring a disconnected socket', async () => {
     const socket = new FakeSocket();
     const cache = new QueryClient();

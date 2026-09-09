@@ -97,10 +97,17 @@ router.post('/:workspaceId/notifications/read-all', requireAuth, async (request,
 });
 
 router.get('/:workspaceId/presence', requireAuth, requireWorkspaceRole('owner', 'admin', 'member'), async (request, response) => {
-  const { getPresence } = await import('../realtime/gateway.js');
-  const ids = getPresence(request.params.workspaceId as string);
-  const members = await WorkspaceMemberModel.find({ workspaceId: request.params.workspaceId, userId: { $in: ids } }).populate('userId', 'name email').lean();
-  response.json({ members });
+  const { getPresenceState } = await import('../realtime/gateway.js');
+  const state = await getPresenceState(request.params.workspaceId as string);
+  const activeMembers = await WorkspaceMemberModel.find({ workspaceId: request.params.workspaceId, disabled: { $ne: true } }).populate('userId', 'name status').lean();
+  const visible = activeMembers.filter((member) => (member.userId as { status?: string } | null)?.status === 'active');
+  const entries = visible.map((member) => {
+    const user = member.userId as unknown as { _id: unknown; name: string };
+    const userId = String(user._id);
+    const online = state.users.includes(userId);
+    return { userId, name: user.name, online, lastSeen: online ? null : state.lastSeen[userId] ?? null };
+  });
+  response.json({ members: entries.filter((entry) => entry.online).map((entry) => ({ userId: { _id: entry.userId, name: entry.name } })), presence: entries });
 });
 
 export default router;

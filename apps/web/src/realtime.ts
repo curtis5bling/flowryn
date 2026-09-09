@@ -28,6 +28,7 @@ export const bindRealtime = (
   let disposed = false;
   let generation = 0;
   let recoveryAttempted = false;
+  let retry: ReturnType<typeof setTimeout> | undefined;
   const seen = new Set<string>();
   const refresh = () => {
     for (const key of ['projects', 'tasks', 'comments', 'notifications', 'notification-count', 'activity', 'presence']) {
@@ -38,6 +39,8 @@ export const bindRealtime = (
     socket.timeout(5000).emit(event, id, (error: Error | null, result?: SocketAcknowledgement) => resolve(!error && result?.ok === true));
   });
   const onConnect = () => {
+    clearTimeout(retry);
+    retry = undefined;
     recoveryAttempted = false;
     const current = ++generation;
     void (async () => {
@@ -65,7 +68,14 @@ export const bindRealtime = (
       recoverSession();
     }
   };
-  const onError = () => { onState('error'); recoverSession(); };
+  const onError = (error: Error & { data?: { code?: string } }) => {
+    if (error?.data?.code === 'UNAVAILABLE') {
+      onState('reconnecting');
+      retry ??= setTimeout(() => { retry = undefined; if (!disposed) socket.connect(); }, 2000);
+      return;
+    }
+    onState('error'); recoverSession();
+  };
   const onEvent = (message: { eventId?: string; workspaceId?: string }) => {
     if (message.workspaceId !== workspaceId || !message.eventId || seen.has(message.eventId)) return;
     seen.add(message.eventId);
@@ -80,6 +90,7 @@ export const bindRealtime = (
   socket.connect();
   return () => {
     disposed = true;
+    clearTimeout(retry);
     generation++;
     socket.off('connect', onConnect);
     socket.off('disconnect', onDisconnect);
