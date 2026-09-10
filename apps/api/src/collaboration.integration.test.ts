@@ -282,3 +282,41 @@ describe('collaboration boundaries', () => {
     expect((await request(app).get(`${base}/notifications`).set('Authorization', memberHeader)).status).toBe(403);
   });
 });
+
+it('delivers private notifications independently of selected projects, once per socket, including after reconnect', async () => {
+  const f = await fixture();
+  const projectB = await ProjectModel.create({ workspaceId: f.workspace.id, name: 'Project B', createdBy: f.owner.id });
+  const recipient = await client(f.tokens[1].accessToken); const other = await client(f.tokens[0].accessToken);
+  await ack(recipient, 'workspace:join', f.workspace.id); await ack(recipient, 'project:join', f.project.id);
+  await ack(other, 'workspace:join', f.workspace.id); await ack(other, 'project:join', projectB.id);
+  const received = vi.fn(); const leaked = vi.fn(); recipient.on('notification.created', received); other.on('notification.created', leaked);
+  const send = (workspaceId = f.workspace.id) => publishNotification(f.member.id, { workspaceId, projectId: projectB.id, actorId: f.owner.id, type: 'notification.created', payload: { title: 'Project B notification' } });
+  let delivered = once(recipient, 'notification.created'); send(); await delivered;
+  expect(received).toHaveBeenCalledTimes(1);
+  await ack(recipient, 'project:join', projectB.id);
+  delivered = once(recipient, 'notification.created'); send(); await delivered;
+  send(f.other.id);
+  await ack(recipient, 'presence:list', f.workspace.id); await ack(other, 'presence:list', f.workspace.id);
+  expect(received).toHaveBeenCalledTimes(2); expect(leaked).not.toHaveBeenCalled();
+  const gone = once(recipient, 'disconnect'); gateway.sockets.sockets.get(recipient.id!)!.disconnect(true); await gone;
+  const reconnected = await client(f.tokens[1].accessToken); await ack(reconnected, 'workspace:join', f.workspace.id);
+  const restored = vi.fn(); reconnected.on('notification.created', restored);
+  delivered = once(reconnected, 'notification.created'); send(); await delivered;
+  await ack(reconnected, 'presence:list', f.workspace.id);
+  expect(restored).toHaveBeenCalledTimes(1); expect(received).toHaveBeenCalledTimes(2);
+  const revoked = once(reconnected, 'disconnect'); await revokeRefreshToken(f.tokens[1].refreshToken); await revoked;
+  send(); await ack(other, 'presence:list', f.workspace.id); expect(restored).toHaveBeenCalledTimes(1);
+});
+
+it('removes private notification access on membership removal and account suspension', async () => {
+  const f = await fixture(); const recipient = await client(f.tokens[1].accessToken); const owner = await client(f.tokens[0].accessToken);
+  await ack(recipient, 'workspace:join', f.workspace.id);
+  const received = vi.fn(); recipient.on('notification.created', received);
+  const send = () => publishNotification(f.member.id, { workspaceId: f.workspace.id, projectId: f.project.id, actorId: f.owner.id, type: 'notification.created', payload: { title: 'Private' } });
+  await WorkspaceMemberModel.updateOne({ workspaceId: f.workspace.id, userId: f.member.id }, { disabled: true });
+  send(); await ack(recipient, 'presence:list', f.workspace.id); expect(received).not.toHaveBeenCalled();
+  await WorkspaceMemberModel.updateOne({ workspaceId: f.workspace.id, userId: f.member.id }, { disabled: false });
+  await ack(recipient, 'workspace:join', f.workspace.id);
+  const gone = once(recipient, 'disconnect'); await UserModel.updateOne({ _id: f.member.id }, { status: 'suspended' }); await gone;
+  send(); await ack(owner, 'presence:list', f.workspace.id); expect(received).not.toHaveBeenCalled();
+});

@@ -38,7 +38,7 @@ export const publishRealtimeEvent = (event: EventInput & { type: Exclude<Realtim
 export const publishNotification = (recipientId: string, event: EventInput) => {
   const message = envelope({ ...event, type: 'notification.created' });
   if (io && !coordinators.get(io)?.available) return message;
-  io?.to(event.projectId ? `${projectRoom(event.workspaceId, event.projectId)}:user:${recipientId}` : `workspace:${event.workspaceId}:user:${recipientId}`).emit('notification.created', message);
+  io?.to(`workspace:${event.workspaceId}:user:${recipientId}`).emit('notification.created', message);
   return message;
 };
 
@@ -202,7 +202,7 @@ export const createRealtimeGateway = (server: HttpServer, allowedOrigins: string
     handle('project:join', async (id, revision) => {
       const project = await ProjectModel.findById(id).select('workspaceId');
       if (!project || !await activeMembership(String(project.workspaceId), socket.data.userId) || blocked(socket.data.userId, socket.data.tokenId, String(project.workspaceId), id) || !stillAuthorized(revision)) return denied();
-      void socket.join([projectRoom(String(project.workspaceId), id), `${projectRoom(String(project.workspaceId), id)}:user:${socket.data.userId}`]);
+      void socket.join(projectRoom(String(project.workspaceId), id));
       return { ok: true };
     });
     handle('project:leave', async (id) => {

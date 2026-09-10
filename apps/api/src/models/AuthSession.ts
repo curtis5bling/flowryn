@@ -7,6 +7,10 @@ const authSessionSchema = new Schema(
     refreshTokenHash: { type: String, required: true },
     expiresAt: { type: Date, required: true },
     revokedAt: { type: Date },
+    version: { type: Number, default: 0 },
+    accessDisabled: { type: Boolean, default: false },
+    rotationOperationId: { type: String },
+    rotationExpiresAt: { type: Date },
   },
   { timestamps: true },
 );

@@ -15,7 +15,7 @@ export const reconcileAuthorization = async (sockets: AuthorizationSnapshot[]) =
   const projects = [...new Set(rooms.filter((room) => room.includes(':project:')).map((room) => room.split(':')[3]!))];
   const results = await Promise.allSettled([
     UserModel.find({ _id: { $in: users }, status: 'active' }).select('_id').maxTimeMS(10000).lean(),
-    AuthSessionModel.find({ tokenId: { $in: sessions }, revokedAt: null, expiresAt: { $gt: new Date() } }).select('tokenId userId').maxTimeMS(10000).lean(),
+    AuthSessionModel.find({ tokenId: { $in: sessions }, accessDisabled: { $ne: true }, revokedAt: null, expiresAt: { $gt: new Date() } }).select('tokenId userId').maxTimeMS(10000).lean(),
     WorkspaceMemberModel.find({ userId: { $in: users }, workspaceId: { $in: workspaces }, disabled: { $ne: true } }).select('userId workspaceId').maxTimeMS(10000).lean(),
     ProjectModel.find({ _id: { $in: projects } }).select('_id workspaceId').maxTimeMS(10000).lean(),
   ] as const);
