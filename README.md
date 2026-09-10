@@ -47,6 +47,10 @@ Client recovery tracks transport retries, session refresh, reconnection, and ter
 
 Account and membership changes must use the Mongoose models (save/update/delete), not raw collection writes or bulk writes, to invoke immediate authorization hooks. Database reconciliation is a backstop for missed messages, not a replacement for those hooks.
 
+Refresh rotation uses an atomic claim on the existing session, with a unique operation ID and a 30-second MongoDB-clock lease. The old refresh hash remains valid until acknowledged coordination and an atomic generation/hash commit succeed. Busy claims and failed coordination return 503; cleanup releases only its own claim, and expired leases recover abandoned attempts. The old access generation stays disabled during retry. Replacement credentials use a fresh generation, so old-generation quarantine cannot block them; replay of the old refresh token is rejected after commit. A failed commit issues no credentials unless a read confirms that exact candidate generation already committed.
+
+Private notifications use `workspace:{workspaceId}:user:{userId}` rooms joined on authorized workspace subscription. Project selection controls collaboration rooms only. Reconnection restores the private room, and membership/session/account revocation removes access. Notification delivery is single-audience; REST remains authoritative.
+
 ## Commands
 
 `npm run build` builds every package. `npm run lint` checks source quality. `npm run typecheck` validates all TypeScript projects. `npm test` runs Vitest. `npm run format:check` verifies formatting.

@@ -7,7 +7,7 @@ import type { Server } from 'socket.io';
 import { io, type Socket } from 'socket.io-client';
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 
-import { issueTokens, revokeRefreshToken } from '../auth/tokens.js';
+import { issueTokens, revokeRefreshToken, rotateRefreshToken } from '../auth/tokens.js';
 import { ProjectModel } from '../models/Project.js';
 import { UserModel } from '../models/User.js';
 import { WorkspaceMemberModel } from '../models/WorkspaceMember.js';
@@ -170,4 +170,15 @@ it('retains local membership quarantine after a missing remote acknowledgement',
   await WorkspaceMemberModel.updateOne({ workspaceId, userId: f.user.id }, { disabled: false });
   expect((await join(a, 'workspace:join', workspaceId)).ok).toBe(false);
   expect(gateways[0]!.sockets.sockets.get(a.id!)!.rooms.has(`workspace:${workspaceId}`)).toBe(false);
+}, 10000);
+
+it('allows a new generation after retrying rotation whose old generation remains quarantined', async () => {
+  const f = await fixture(); await connect(0, f.tokens.accessToken); await connect(1, f.tokens.accessToken);
+  const lostAck = vi.spyOn(transports[1]!, 'publish').mockResolvedValue(undefined);
+  await expect(rotateRefreshToken(f.tokens.refreshToken)).rejects.toMatchObject({ code: 'REVOCATION_INCOMPLETE' });
+  lostAck.mockRestore();
+  const replacement = await rotateRefreshToken(f.tokens.refreshToken);
+  expect((await connect(0, replacement.accessToken)).connected).toBe(true);
+  expect((await connect(1, replacement.accessToken)).connected).toBe(true);
+  await expect(rotateRefreshToken(f.tokens.refreshToken)).rejects.toThrow('Invalid refresh token');
 }, 10000);
