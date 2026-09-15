@@ -247,17 +247,15 @@ const validateReferences = async (
       assertIncident(action.resolutionSummary, 400, 'Resolution summary required');
   }
 };
-const targetPayload = async (request: Request) => {
-  const body = parse(
-    z
-      .object({
-        operationId: z.string().uuid(),
-        incidentId: incidentIdSchema.optional(),
-        taskId: incidentIdSchema.optional(),
-      })
-      .strict(),
-    request.body,
-  );
+const manualTargetSchema = z
+  .object({
+    operationId: z.string().uuid(),
+    incidentId: incidentIdSchema.optional(),
+    taskId: incidentIdSchema.optional(),
+  })
+  .strict();
+const targetPayload = async (request: Request, session?: ClientSession) => {
+  const body = parse(manualTargetSchema, request.body);
   const workspaceId = request.params.workspaceId as string;
   const payload: ReturnType<typeof automationPayloadSchema.parse> = {
     actorId: request.auth!.userId,
@@ -267,7 +265,7 @@ const targetPayload = async (request: Request) => {
       workspaceId,
       _id: body.incidentId,
       archivedAt: null,
-    });
+    }).session(session ?? null);
     assertIncident(incident, 404, 'Incident not found');
     Object.assign(payload, {
       incidentId: incident.id,
@@ -281,7 +279,9 @@ const targetPayload = async (request: Request) => {
     });
   }
   if (body.taskId) {
-    const task = await TaskModel.findOne({ workspaceId, _id: body.taskId });
+    const task = await TaskModel.findOne({ workspaceId, _id: body.taskId }).session(
+      session ?? null,
+    );
     assertIncident(task, 404, 'Task not found');
     Object.assign(payload, {
       taskId: task.id,
@@ -489,20 +489,12 @@ router.post(`${base}/rules/:ruleId/dry-run`, async (request, response) => {
 });
 router.post(`${base}/rules/:ruleId/execute`, async (request, response) => {
   await admin(request);
-  const { body, payload } = await targetPayload(request);
+  const body = parse(manualTargetSchema, request.body);
   const requestHash = createHash('sha256')
     .update(JSON.stringify({ body, actorId: request.auth!.userId, ruleId: request.params.ruleId }))
     .digest('hex');
   await transaction(async (session) => {
     await admin(request, session);
-    const rule = await AutomationRuleModel.findOne({
-      ...scope(request),
-      _id: request.params.ruleId,
-      triggerType: 'automation.manual',
-      enabled: true,
-      archivedAt: null,
-    }).session(session);
-    assertIncident(rule, 404, 'Enabled manual rule required');
     const existing = await OutboxEventModel.findOne({
       ...scope(request),
       eventId: body.operationId,
@@ -512,13 +504,22 @@ router.post(`${base}/rules/:ruleId/execute`, async (request, response) => {
     if (existing) {
       assertIncident(
         String(existing.initiatedBy) === request.auth!.userId &&
-          String(existing.targetRuleId) === rule.id &&
+          String(existing.targetRuleId) === request.params.ruleId &&
           existing.requestHash === requestHash,
         409,
         'Operation ID already used',
       );
       return;
     }
+    const rule = await AutomationRuleModel.findOne({
+      ...scope(request),
+      _id: request.params.ruleId,
+      triggerType: 'automation.manual',
+      enabled: true,
+      archivedAt: null,
+    }).session(session);
+    assertIncident(rule, 404, 'Enabled manual rule required');
+    const { payload } = await targetPayload(request, session);
     await emitDomainEvent(session, {
       workspaceId: request.params.workspaceId as string,
       eventId: body.operationId,

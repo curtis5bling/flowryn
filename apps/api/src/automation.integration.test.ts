@@ -207,6 +207,20 @@ describe('automation authorization and workspace boundaries', () => {
       ).status,
     ).toBe(202);
     expect(await AutomationRunModel.countDocuments()).toBe(1);
+    await TaskModel.deleteOne({ _id: task._id });
+    await AutomationRuleModel.updateOne(
+      { _id: rule._id },
+      { enabled: false, archivedAt: new Date() },
+    );
+    expect(
+      (
+        await request(app)
+          .post(`${f.base}/rules/${rule.id}/execute`)
+          .set('Cookie', cookie)
+          .send(body)
+      ).status,
+    ).toBe(202);
+    expect(await AutomationRunModel.countDocuments()).toBe(1);
     expect(
       (
         await request(app)
