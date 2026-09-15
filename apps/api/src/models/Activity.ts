@@ -4,7 +4,7 @@ const activitySchema = new Schema(
   {
     workspaceId: { type: Schema.Types.ObjectId, ref: 'Workspace', required: true, index: true },
     actorId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
-    entityType: { type: String, enum: ['project', 'task'], required: true },
+    entityType: { type: String, enum: ['project', 'task', 'incident'], required: true },
     entityId: { type: Schema.Types.ObjectId, required: true, index: true },
     action: { type: String, required: true, maxlength: 80 },
     metadata: { type: Schema.Types.Mixed, default: {} },

@@ -8,6 +8,7 @@ import { io, type Socket } from 'socket.io-client';
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 
 import { issueTokens, revokeRefreshToken, rotateRefreshToken } from '../auth/tokens.js';
+import { IncidentModel } from '../models/Incident.js';
 import { ProjectModel } from '../models/Project.js';
 import { UserModel } from '../models/User.js';
 import { WorkspaceMemberModel } from '../models/WorkspaceMember.js';
@@ -182,3 +183,18 @@ it('allows a new generation after retrying rotation whose old generation remains
   expect((await connect(1, replacement.accessToken)).connected).toBe(true);
   await expect(rotateRefreshToken(f.tokens.refreshToken)).rejects.toThrow('Invalid refresh token');
 }, 10000);
+
+it('coordinates incident presence and revokes remote incident subscriptions', async () => {
+  const f = await fixture();
+  const incident = await IncidentModel.create({ workspaceId, incidentNumber: 'INC-000001', title: 'Cluster incident', severity: 'sev2', declaredBy: f.user.id, declaredAt: new Date() });
+  const a = await connect(0, f.tokens.accessToken); const b = await connect(1, f.tokens.accessToken);
+  expect((await join(a, 'incident:join', incident.id)).ok).toBe(true);
+  expect((await join(b, 'incident:join', incident.id)).ok).toBe(true);
+  expect(await getPresence(incident.id, gateways[0])).toEqual([f.user.id]);
+  gateways[0]!.sockets.sockets.get(a.id!)!.disconnect(true);
+  expect(await getPresence(incident.id, gateways[1])).toEqual([f.user.id]);
+  await WorkspaceMemberModel.deleteOne({ workspaceId, userId: f.user.id });
+  expect(gateways[1]!.sockets.sockets.get(b.id!)!.rooms.has(`workspace:${workspaceId}:incident:${incident.id}`)).toBe(false);
+  await vi.waitFor(async () => expect(await getPresence(incident.id, gateways[1])).toEqual([]));
+  expect((await join(b, 'incident:join', incident.id)).ok).toBe(false);
+});

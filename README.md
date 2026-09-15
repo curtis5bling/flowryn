@@ -11,7 +11,7 @@ Flowryn is a TypeScript MERN monorepo for turning scattered work into clear, ada
 ```bash
 npm install
 copy .env.example .env
-docker compose up -d
+docker compose up -d --wait
 npm run dev
 ```
 
@@ -21,7 +21,7 @@ The dashboard runs on `http://localhost:5173`; the API health check is available
 
 Registration creates a user and routes to explicit workspace onboarding, which creates the first workspace and owner membership. Login, logout, refresh, and current-user requests use secure HTTP-only cookies. Set `JWT_SECRET` in local or deployed environments; the development fallback is intentionally not suitable for production.
 
-Workspace access is tenant-scoped: authenticated requests must have a membership for the requested `workspaceId`, and member-management endpoints require an owner or admin role. Start MongoDB with Docker Compose before running the API or its integration tests.
+Workspace access is tenant-scoped: authenticated requests must have a membership for the requested `workspaceId`, and member-management endpoints require an owner or admin role. Start MongoDB with Docker Compose before running the API. Integration tests launch isolated MongoDB processes themselves.
 
 ## Projects and task boards
 
@@ -51,6 +51,16 @@ Refresh rotation uses an atomic claim on the existing session, with a unique ope
 
 Private notifications use `workspace:{workspaceId}:user:{userId}` rooms joined on authorized workspace subscription. Project selection controls collaboration rooms only. Reconnection restores the private room, and membership/session/account revocation removes access. Notification delivery is single-audience; REST remains authoritative.
 
+## Incident management (Milestone 5)
+
+Choose **Incident response** in your workspace to declare and coordinate incidents, maintain a chronological timeline, assign commanders/responders, link work, attach runbook snapshots, and view server-calculated operational metrics. Owners/admins manage runbooks and archive resolved incidents; commanders control response state and assignments; members can declare incidents and contribute timeline updates. Sev1 declaration and resolution/archive actions have explicit confirmation controls.
+
+MongoDB **replica-set or sharded-cluster transactions are required**. Docker Compose initializes a single-node `rs0` replica set for local development; wait for `docker compose up -d --wait` before starting the API. Use the updated `MONGODB_URI` in `.env.example`. An existing local MongoDB volume can be retained: recreating the container with the new replica-set command initializes replication around its existing data. The localhost member address in Compose is for the host-run development API; deployed containers need reachable replica-set member addresses. Production startup rejects standalone MongoDB and waits for incident indexes. It also continues to require Redis for coordination. There is no nontransactional incident fallback.
+
+Incident state, append-only timeline, activity and recipient notifications commit atomically. Retry a failed declaration/action with the **same operation ID and body**; the UI provides a retry button that retains both. A 503 or lost response may follow an already committed transaction, so check/retry the original operation before starting a different declaration. Live events contain identifiers and empty payloads, never incident narrative or runbook instructions. REST is authoritative and is polled while live delivery is unavailable. Redis outages preserve durable incident writes, while sockets fail closed and recover their subscriptions when coordination returns.
+
+The API tests use an isolated `MongoMemoryReplSet`; normal tests require no external MongoDB or Redis service. The first test run may download a MongoDB binary. See [Incident API and state machine](docs/INCIDENTS.md) for routes, permissions, retry semantics and metric definitions. External monitoring, on-call scheduling, public status pages and AI response automation remain out of scope.
+
 ## Commands
 
 `npm run build` builds every package. `npm run lint` checks source quality. `npm run typecheck` validates all TypeScript projects. `npm test` runs Vitest. `npm run format:check` verifies formatting.
@@ -59,3 +69,4 @@ Private notifications use `workspace:{workspaceId}:user:{userId}` rooms joined o
 
 - [Architecture](docs/ARCHITECTURE.md)
 - [Roadmap](docs/ROADMAP.md)
+- [Incident API and state machine](docs/INCIDENTS.md)

@@ -26,7 +26,7 @@ const recoverCookieSession = (): Promise<SessionRecovery> => {
 
 export const bindRealtime = (
   socket: Socket, workspaceId: string, projectId: string | undefined,
-  queryClient: QueryClient, onState: (state: ConnectionState) => void,
+  queryClient: QueryClient, onState: (state: ConnectionState) => void, incidentId?: string,
 ) => {
   let disposed = false;
   let generation = 0;
@@ -35,11 +35,11 @@ export const bindRealtime = (
   let retry: ReturnType<typeof setTimeout> | undefined;
   const seen = new Set<string>();
   const refresh = () => {
-    for (const key of ['projects', 'tasks', 'comments', 'notifications', 'notification-count', 'activity', 'presence']) {
+    for (const key of ['projects', 'tasks', 'comments', 'notifications', 'notification-count', 'activity', 'presence', 'incidents', 'incident', 'incident-timeline', 'incident-presence', 'incident-metrics']) {
       void queryClient.invalidateQueries({ queryKey: [key, workspaceId], refetchType: key === 'tasks' && queryClient.isMutating() > 0 ? 'none' : 'active' });
     }
   };
-  const join = (event: 'workspace:join' | 'project:join', id: string) => new Promise<boolean>((resolve) => {
+  const join = (event: 'workspace:join' | 'project:join' | 'incident:join', id: string) => new Promise<boolean>((resolve) => {
     socket.timeout(5000).emit(event, id, (error: Error | null, result?: SocketAcknowledgement) => resolve(!error && result?.ok === true));
   });
   const onConnect = () => {
@@ -51,6 +51,8 @@ export const bindRealtime = (
       if (!await join('workspace:join', workspaceId)) throw new Error('Workspace access unavailable');
       if (disposed || current !== generation) return;
       if (projectId && !await join('project:join', projectId)) throw new Error('Project access unavailable');
+      if (disposed || current !== generation) return;
+      if (incidentId && !await join('incident:join', incidentId)) throw new Error('Incident access unavailable');
       if (disposed || current !== generation) return;
       onState('connected');
       refresh();

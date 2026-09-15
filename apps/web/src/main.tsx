@@ -3,6 +3,7 @@ import { StrictMode, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import { createWorkspace, getCurrentUser, listWorkspaces, login, logout, register } from './api';
+import { IncidentApp } from './components/IncidentApp';
 import { WorkspaceApp } from './components/WorkspaceApp';
 import './styles.css';
 
@@ -46,6 +47,7 @@ function Onboarding({ onComplete }: { onComplete: () => void }) {
 function App() {
   const me = useQuery({ queryKey: ['me'], queryFn: getCurrentUser, retry: false });
   const workspaces = useQuery({ queryKey: ['workspaces'], queryFn: listWorkspaces, enabled: Boolean(me.data) });
+  const [area, setArea] = useState<'projects' | 'incidents'>('projects');
   const [authMode, setAuthMode] = useState<AuthMode>('login');
   const [showOnboarding, setShowOnboarding] = useState(false);
   const logoutMutation = useMutation({ mutationFn: logout, onSuccess: async () => { await queryClient.cancelQueries(); queryClient.clear(); queryClient.setQueryData(['me'], null); } });
@@ -54,7 +56,7 @@ function App() {
   if (showOnboarding || (!workspaces.isLoading && workspaces.data?.workspaces.length === 0)) return <Onboarding onComplete={() => { setShowOnboarding(false); void queryClient.invalidateQueries({ queryKey: ['workspaces'] }); }} />;
   const activeWorkspace = workspaces.data?.workspaces[0];
   if (!activeWorkspace) return <Onboarding onComplete={() => { void queryClient.invalidateQueries({ queryKey: ['workspaces'] }); }} />;
-  return <WorkspaceApp workspaceId={activeWorkspace.id} workspaceName={activeWorkspace.name} userName={me.data.user.name} onLogout={() => logoutMutation.mutate()} />;
+  return <><nav className="area-navigation" aria-label="Workspace areas"><button aria-pressed={area === 'projects'} onClick={() => setArea('projects')}>Projects</button><button aria-pressed={area === 'incidents'} onClick={() => setArea('incidents')}>Incident response</button></nav>{area === 'incidents' ? <IncidentApp workspaceId={activeWorkspace.id} workspaceName={activeWorkspace.name} userId={me.data.user.id} role={activeWorkspace.role} onLogout={() => logoutMutation.mutate()} /> : <WorkspaceApp workspaceId={activeWorkspace.id} workspaceName={activeWorkspace.name} userName={me.data.user.name} onLogout={() => logoutMutation.mutate()} />}</>;
 }
 
 createRoot(document.getElementById('root')!).render(<StrictMode><QueryClientProvider client={queryClient}><App /></QueryClientProvider></StrictMode>);

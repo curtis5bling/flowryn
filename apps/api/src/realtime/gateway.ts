@@ -7,6 +7,7 @@ import { Server, type Socket } from 'socket.io';
 
 import { onAuthorizationChange, type Change } from '../auth/revocation.js';
 import { authenticateAccessToken } from '../auth/tokens.js';
+import { IncidentModel } from '../models/Incident.js';
 import { ProjectModel } from '../models/Project.js';
 import { WorkspaceMemberModel } from '../models/WorkspaceMember.js';
 
@@ -20,9 +21,11 @@ const coordinators = new WeakMap<Server, Coordination>();
 export const realtimeAvailable = () => Boolean(io && coordinators.get(io)?.available);
 type EventInput = Omit<RealtimeEvent, 'eventId' | 'timestamp'>;
 const envelope = (event: EventInput): RealtimeEvent => ({ ...event, eventId: randomUUID(), timestamp: new Date().toISOString() });
-const audiences: Record<Exclude<RealtimeEvent['type'], 'notification.created'>, 'workspace' | 'project'> = {
+const audiences: Record<Exclude<RealtimeEvent['type'], 'notification.created'>, 'workspace' | 'project' | 'incident'> = {
   'project.created': 'workspace', 'project.updated': 'workspace', 'project.archived': 'workspace', 'presence.updated': 'workspace',
   'task.created': 'project', 'task.updated': 'project', 'task.moved': 'project', 'task.reordered': 'project', 'task.assigned': 'project', 'task.deleted': 'project',
+  'incident.declared': 'workspace', 'incident.updated': 'workspace', 'incident.severity_changed': 'workspace', 'incident.status_changed': 'workspace', 'incident.commander_changed': 'workspace', 'incident.responder_changed': 'workspace', 'incident.resolved': 'workspace', 'incident.reopened': 'workspace',
+  'incident.timeline_added': 'incident', 'incident.runbook_attached': 'incident', 'incident.step_completed': 'incident',
   'comment.created': 'project', 'comment.updated': 'project', 'comment.deleted': 'project',
 };
 
@@ -31,7 +34,8 @@ export const publishRealtimeEvent = (event: EventInput & { type: Exclude<Realtim
   if (io && !coordinators.get(io)?.available) return message;
   const audience = audiences[event.type];
   if (audience === 'project' && !event.projectId) throw new Error('Project audience requires a project');
-  io?.to(audience === 'workspace' ? workspaceRoom(event.workspaceId) : projectRoom(event.workspaceId, event.projectId!)).emit(event.type, message);
+  if (audience === 'incident' && !event.incidentId) throw new Error('Incident audience requires an incident');
+  io?.to(audience === 'workspace' ? workspaceRoom(event.workspaceId) : audience === 'incident' ? `workspace:${event.workspaceId}:incident:${event.incidentId}` : projectRoom(event.workspaceId, event.projectId!)).emit(event.type, message);
   return message;
 };
 
@@ -69,7 +73,7 @@ export const createRealtimeGateway = (server: HttpServer, allowedOrigins: string
   // A revision prevents an in-flight join from restoring access after eviction.
   let authorizationRevision = 0;
   const syncPresence = () => coordination.writePresence([...socketServer.sockets.sockets.values()].flatMap((socket) =>
-    [...socket.rooms].filter((room) => /^workspace:[a-f\d]{24}$/i.test(room)).map((room) => ({ workspaceId: room.slice(10), userId: String(socket.data.userId) }))),
+    [...socket.rooms].filter((room) => /^workspace:[a-f\d]{24}(:incident:[a-f\d]{24})?$/i.test(room)).map((room) => ({ workspaceId: room.split(':').at(-1)!, userId: String(socket.data.userId) }))),
   );
   const announcePresence = async (workspaceId: string, userId: string) => {
     await syncPresence();
@@ -205,6 +209,17 @@ export const createRealtimeGateway = (server: HttpServer, allowedOrigins: string
       void socket.join(projectRoom(String(project.workspaceId), id));
       return { ok: true };
     });
+    handle('incident:join', async (id, revision) => {
+      const incident = await IncidentModel.findById(id).select('workspaceId');
+      if (!incident || !await activeMembership(String(incident.workspaceId), socket.data.userId) || blocked(socket.data.userId, socket.data.tokenId, String(incident.workspaceId)) || !stillAuthorized(revision)) return denied();
+      await socket.join(`workspace:${incident.workspaceId}:incident:${id}`);
+      await syncPresence();
+      return stillAuthorized(revision) ? { ok: true } : denied();
+    });
+    handle('incident:leave', async (id) => {
+      for (const room of socket.rooms) if (room.endsWith(`:incident:${id}`)) await socket.leave(room);
+      await syncPresence(); return { ok: true };
+    });
     handle('project:leave', async (id) => {
       for (const room of socket.rooms) if (room.includes(`:project:${id}`)) void socket.leave(room);
       return { ok: true };
@@ -214,6 +229,7 @@ export const createRealtimeGateway = (server: HttpServer, allowedOrigins: string
       const users = await getPresence(id, socketServer);
       return stillAuthorized(revision) ? { ok: true, users } : denied();
     });
+    socket.on('disconnect', () => { void syncPresence().catch(() => coordination.fail()); });
     socket.on('disconnecting', () => {
       cancelExpiration();
       for (const room of [...socket.rooms]) if (/^workspace:[a-f\d]{24}$/i.test(room)) leaveWorkspace(socket, room.slice(10));
