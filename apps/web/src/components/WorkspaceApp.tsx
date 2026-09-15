@@ -71,7 +71,7 @@ function CollaborationPanel({ workspaceId, projectId, taskId }: { workspaceId: s
   </section>;
 }
 
-function NotificationCenter({ workspaceId }: { workspaceId: string }) {
+export function NotificationCenter({ workspaceId }: { workspaceId: string }) {
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const [page, setPage] = useState(1);
