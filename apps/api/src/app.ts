@@ -4,6 +4,7 @@ import cors from 'cors';
 import express, { type ErrorRequestHandler } from 'express';
 
 import authRouter from './routes/auth.js';
+import projectsRouter from './routes/projects.js';
 import workspacesRouter from './routes/workspaces.js';
 
 export const createApp = () => {
@@ -18,6 +19,7 @@ export const createApp = () => {
     );
   });
   app.use('/api/auth', authRouter);
+  app.use('/api/workspaces', projectsRouter);
   app.use('/api/workspaces', workspacesRouter);
   const errorHandler: ErrorRequestHandler = (error, _request, response, next) => {
     void next;

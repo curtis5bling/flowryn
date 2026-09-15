@@ -19,9 +19,13 @@ The dashboard runs on `http://localhost:5173`; the API health check is available
 
 ## Identity development
 
-Registration creates a user, a personal workspace, and an owner membership. Login, logout, refresh, and current-user requests use secure HTTP-only cookies. Set `JWT_SECRET` in local or deployed environments; the development fallback is intentionally not suitable for production.
+Registration creates a user and routes to explicit workspace onboarding, which creates the first workspace and owner membership. Login, logout, refresh, and current-user requests use secure HTTP-only cookies. Set `JWT_SECRET` in local or deployed environments; the development fallback is intentionally not suitable for production.
 
 Workspace access is tenant-scoped: authenticated requests must have a membership for the requested `workspaceId`, and member-management endpoints require an owner or admin role. Start MongoDB with Docker Compose before running the API or its integration tests.
+
+## Projects and task boards
+
+Inside an authorized workspace, owners and admins manage projects while all members can create and edit tasks. The board supports five statuses, priority and due-date filters, member assignment, task ordering, project activity history, and confirmation for archive/delete actions. Task mutations and activity feeds remain workspace-scoped; real-time updates are intentionally deferred.
 
 ## Commands
 
