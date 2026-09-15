@@ -45,7 +45,9 @@ export const encryptSecret = (secret: string, workspaceId: string, integrationId
   const { version, keys } = encryptionConfig();
   const iv = randomBytes(12);
   const cipher = createCipheriv('aes-256-gcm', Buffer.from(keys[version]!, 'hex'), iv);
-  cipher.setAAD(Buffer.from(`${workspaceId}:${integrationId}:${version}`));
+  cipher.setAAD(
+    Buffer.from(`${workspaceId.toLowerCase()}:${integrationId.toLowerCase()}:${version}`),
+  );
   const encrypted = Buffer.concat([cipher.update(secret, 'utf8'), cipher.final()]);
   return {
     keyVersion: version,

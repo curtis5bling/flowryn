@@ -806,7 +806,7 @@ router.post(`${base}/integrations/:integrationId/test`, async (request, response
     const eventId = randomUUID();
     const action = { id: randomUUID(), type: 'webhook.invoke', integrationId: integration.id };
     const snapshot = automationRuleSchema.parse({
-      name: `Test: ${integration.name}`,
+      name: `Test: ${integration.name}`.slice(0, 200),
       description: '',
       enabled: true,
       triggerType: integration.outboundEvents[0],

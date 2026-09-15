@@ -707,6 +707,50 @@ describe('integration credentials, signed ingestion and deliveries', () => {
         inboundEvents: ['alert.received'],
         outboundEvents: ['automation.manual'],
       });
+  it('supports uppercase ObjectIds and maximum-length integration test names', async () => {
+    const f = await fixture();
+    const base = `/api/workspaces/${f.workspace.id.toUpperCase()}/automation`;
+    const cookie = await f.cookie();
+    const created = await request(app)
+      .post(`${base}/integrations`)
+      .set('Cookie', cookie)
+      .send({
+        name: 'A'.repeat(200),
+        type: 'genericWebhook',
+        status: 'active',
+        endpoint: 'https://hooks.company.com/alerts',
+        inboundEvents: [],
+        outboundEvents: ['automation.manual'],
+      });
+    expect(created.status).toBe(201);
+    const id = created.body.integration.id as string;
+    let stored = await IntegrationModel.findById(id).select('+credentials');
+    expect(decryptSecret(stored as NonNullable<typeof stored> & { credentials: string })).toBe(
+      created.body.secret,
+    );
+    const rotated = await request(app)
+      .post(`${base}/integrations/${id.toUpperCase()}/rotate`)
+      .set('Cookie', cookie)
+      .send({});
+    expect(rotated.status).toBe(200);
+    stored = await IntegrationModel.findById(id).select('+credentials');
+    expect(decryptSecret(stored as NonNullable<typeof stored> & { credentials: string })).toBe(
+      rotated.body.secret,
+    );
+    const tested = await request(app)
+      .post(`${base}/integrations/${id}/test`)
+      .set('Cookie', cookie)
+      .send({});
+    expect(tested.status).toBe(202);
+    const run = await AutomationRunModel.findById(tested.body.run.id).select('+ruleSnapshot');
+    expect(run!.ruleSnapshot.name).toHaveLength(200);
+    expect(
+      (await executeNext({
+        resolve: async () => [{ address: '8.8.8.8', family: 4 }],
+        send: async () => 204,
+      }))!.status,
+    ).toBe('succeeded');
+  });
   it('encrypts with tenant-bound authentication and never returns stored credentials', async () => {
     const f = await fixture();
     const result = await createIntegration(f);
