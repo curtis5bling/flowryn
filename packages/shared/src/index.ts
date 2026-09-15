@@ -144,3 +144,32 @@ export type Activity = z.infer<typeof activitySchema>;
 export type ProjectStatus = z.infer<typeof projectStatusSchema>;
 export type TaskStatus = z.infer<typeof taskStatusSchema>;
 export type TaskPriority = z.infer<typeof taskPrioritySchema>;
+
+export const commentSchema = z.object({
+  id: z.string(), workspaceId: z.string(), projectId: z.string(), taskId: z.string(), authorId: z.string(),
+  body: z.string(), editedAt: z.string().datetime().nullable(), createdAt: z.string().datetime(), updatedAt: z.string().datetime(),
+});
+export const notificationTypeSchema = z.enum(['task_assigned', 'task_status_changed', 'task_commented', 'project_archived']);
+export const notificationSchema = z.object({
+  id: z.string(), workspaceId: z.string(), recipientId: z.string(), actorId: z.string(), type: notificationTypeSchema,
+  entityType: activityEntityTypeSchema, entityId: z.string(), title: z.string(), readAt: z.string().datetime().nullable(), createdAt: z.string().datetime(), updatedAt: z.string().datetime(),
+});
+export const realtimeEventNameSchema = z.enum(['task.created', 'task.updated', 'task.moved', 'task.reordered', 'task.assigned', 'task.deleted', 'project.created', 'project.updated', 'project.archived', 'comment.created', 'comment.updated', 'comment.deleted', 'notification.created', 'presence.updated']);
+export const realtimeEventSchema = z.object({ eventId: z.string(), timestamp: z.string().datetime(), workspaceId: mongoIdSchema, projectId: mongoIdSchema.optional(), entityId: mongoIdSchema.optional(), actorId: mongoIdSchema, type: realtimeEventNameSchema, payload: z.record(z.string(), z.unknown()) });
+export const createCommentRequestSchema = z.object({ body: z.string().trim().min(1).max(2000) });
+export const updateCommentRequestSchema = createCommentRequestSchema;
+export const notificationListQuerySchema = z.object({ page: z.coerce.number().int().min(1).default(1), limit: z.coerce.number().int().min(1).max(100).default(20), unread: z.enum(['true', 'false']).transform((value) => value === 'true').optional() });
+export const commentListQuerySchema = z.object({ page: z.coerce.number().int().min(1).default(1), limit: z.coerce.number().int().min(1).max(100).default(50) });
+export type Comment = z.infer<typeof commentSchema>;
+export type Notification = z.infer<typeof notificationSchema>;
+export type RealtimeEvent = z.infer<typeof realtimeEventSchema>;
+
+export const socketPayloadSchemas = {
+  'workspace:join': mongoIdSchema,
+  'workspace:leave': mongoIdSchema,
+  'project:join': mongoIdSchema,
+  'project:leave': mongoIdSchema,
+  'presence:list': mongoIdSchema,
+} as const;
+export type SocketRequest = keyof typeof socketPayloadSchemas;
+export type SocketAcknowledgement = { ok: true; users?: string[] } | { ok: false; error: { code: 'INVALID_PAYLOAD' | 'UNAUTHORIZED' | 'UNAVAILABLE'; message: string } };

@@ -1,6 +1,6 @@
 import type { RequestHandler } from 'express';
 
-import { getUserForAuth, verifyAccessToken } from '../auth/tokens.js';
+import { authenticateAccessToken } from '../auth/tokens.js';
 import { WorkspaceMemberModel } from '../models/WorkspaceMember.js';
 
 export const requireAuth: RequestHandler = async (request, response, next) => {
@@ -14,8 +14,7 @@ export const requireAuth: RequestHandler = async (request, response, next) => {
   }
 
   try {
-    const payload = verifyAccessToken(token);
-    const user = await getUserForAuth(payload.sub);
+    const { user } = await authenticateAccessToken(token);
     if (!user || user.status !== 'active') {
       response.status(401).json({ error: 'Authentication required' });
       return;
@@ -41,7 +40,8 @@ export const requireWorkspaceRole = (...roles: Array<'owner' | 'admin' | 'member
     response.status(400).json({ error: 'Workspace id is required' });
     return;
   }
-  const membership = await WorkspaceMemberModel.findOne({ workspaceId, userId: request.auth.userId }).select('role');
+  if (!/^[a-f\d]{24}$/i.test(workspaceId)) { response.status(400).json({ error: 'Invalid workspace id' }); return; }
+  const membership = await WorkspaceMemberModel.findOne({ workspaceId, userId: request.auth.userId, disabled: { $ne: true } }).select('role');
   if (!membership || !roles.includes(membership.role)) {
     response.status(403).json({ error: 'Workspace access denied' });
     return;

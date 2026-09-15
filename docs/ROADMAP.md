@@ -10,6 +10,11 @@
 
 ## Next
 
+- [x] Real-time collaboration, task comments, private notifications, and reconnect recovery
+- [x] Session-bound socket authentication, expiration, and model-driven authorization revocation
+- [x] Redis-backed cross-process presence and revocation delivery
+- [x] Fail-closed Redis outages, readiness, recovery, graceful shutdown, and simulated cluster regression tests
+
 - [ ] Workflow builder with trigger, condition, and action nodes
 - [ ] Redis-backed job execution and activity history
 

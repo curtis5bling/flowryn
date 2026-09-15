@@ -2,10 +2,11 @@ import { loginRequestSchema, registerRequestSchema } from '@flowryn/shared';
 import bcrypt from 'bcryptjs';
 import { Router, type Response } from 'express';
 
-import { issueTokens, revokeRefreshToken, rotateRefreshToken } from '../auth/tokens.js';
+import { issueTokens, revokeRefreshToken, rotateRefreshToken, RotationUnavailable } from '../auth/tokens.js';
 import { requireAuth } from '../middleware/auth.js';
 import { validateBody } from '../middleware/validation.js';
 import { UserModel } from '../models/User.js';
+import { CoordinationUnavailable, RevocationIncomplete } from '../realtime/coordination.js';
 
 const router = Router();
 const accessCookie = 'accessToken';
@@ -61,7 +62,8 @@ router.post('/refresh', async (request, response) => {
     const tokens = await rotateRefreshToken(request.cookies?.[refreshCookie]);
     setAuthCookies(response, tokens);
     response.json({ ok: true });
-  } catch {
+  } catch (error) {
+    if (error instanceof CoordinationUnavailable) { response.status(503).json({ error: error.message, code: error instanceof RevocationIncomplete || error instanceof RotationUnavailable ? error.code : 'COORDINATION_UNAVAILABLE' }); return; }
     response.status(401).json({ error: 'Refresh token expired or invalid' });
   }
 });

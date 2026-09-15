@@ -48,7 +48,7 @@ function App() {
   const workspaces = useQuery({ queryKey: ['workspaces'], queryFn: listWorkspaces, enabled: Boolean(me.data) });
   const [authMode, setAuthMode] = useState<AuthMode>('login');
   const [showOnboarding, setShowOnboarding] = useState(false);
-  const logoutMutation = useMutation({ mutationFn: logout, onSuccess: () => queryClient.setQueryData(['me'], undefined) });
+  const logoutMutation = useMutation({ mutationFn: logout, onSuccess: async () => { await queryClient.cancelQueries(); queryClient.clear(); queryClient.setQueryData(['me'], null); } });
   if (me.isLoading) return <main className="center-page"><div className="loading-mark">f</div></main>;
   if (!me.data) return <AuthShell mode={authMode} onModeChange={setAuthMode} />;
   if (showOnboarding || (!workspaces.isLoading && workspaces.data?.workspaces.length === 0)) return <Onboarding onComplete={() => { setShowOnboarding(false); void queryClient.invalidateQueries({ queryKey: ['workspaces'] }); }} />;
