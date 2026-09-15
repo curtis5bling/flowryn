@@ -5,6 +5,7 @@ import { createServer } from 'node:http';
 import mongoose from 'mongoose';
 
 import { createApp } from './app.js';
+import { ensureIncidentStorage } from './incidents/storage.js';
 import { coordinationLog } from './realtime/coordination.js';
 import { createRealtimeGateway } from './realtime/gateway.js';
 import { createCoordination } from './realtime/redis.js';
@@ -31,6 +32,7 @@ const start = async () => {
   };
   try {
     await mongoose.connect(process.env.MONGODB_URI ?? 'mongodb://localhost:27017/flowryn', { serverSelectionTimeoutMS: 5000 });
+    await ensureIncidentStorage();
     coordination.assertAvailable();
     await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(port, resolve); });
     coordinationLog('api_ready');
@@ -40,6 +42,6 @@ const start = async () => {
   } catch { await stop(); throw new Error('API startup failed'); }
 };
 void start().catch(() => {
-  console.error(JSON.stringify({ service: 'api', event: 'startup_failed', message: 'Check database connectivity and required REDIS_URL coordination; memory mode is forbidden in production' }));
+  console.error(JSON.stringify({ service: 'api', event: 'startup_failed', message: 'Check MongoDB replica-set connectivity, incident indexes and required REDIS_URL coordination; memory mode is forbidden in production' }));
   process.exitCode = 1;
 });

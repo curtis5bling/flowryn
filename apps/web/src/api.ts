@@ -2,7 +2,7 @@ import type { AuthResponse, LoginRequest, Project, RegisterRequest, Task, User }
 
 const apiUrl = import.meta.env.VITE_API_URL ?? 'http://localhost:4000';
 
-const request = async <T>(path: string, options: RequestInit = {}): Promise<T> => {
+export const request = async <T>(path: string, options: RequestInit = {}): Promise<T> => {
   const response = await fetch(`${apiUrl}${path}`, {
     ...options,
     credentials: 'include',

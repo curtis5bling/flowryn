@@ -7,6 +7,7 @@ import { CoordinationUnavailable, RevocationIncomplete } from './realtime/coordi
 import { realtimeAvailable } from './realtime/gateway.js';
 import authRouter from './routes/auth.js';
 import collaborationRouter from './routes/collaboration.js';
+import incidentsRouter from './routes/incidents.js';
 import projectsRouter from './routes/projects.js';
 import workspacesRouter from './routes/workspaces.js';
 
@@ -20,7 +21,7 @@ export const createApp = () => {
     next();
   });
   app.use(cookieParser());
-  app.use(express.json());
+  app.use(express.json({ limit: '2mb' }));
   app.get('/api/ready', (_request, response) => { const ready = realtimeAvailable(); response.status(ready ? 200 : 503).json({ ready }); });
   app.get('/api/health', (_request, response) => {
     response.json(
@@ -28,14 +29,16 @@ export const createApp = () => {
     );
   });
   app.use('/api/auth', authRouter);
+  app.use('/api/workspaces', incidentsRouter);
   app.use('/api/workspaces', collaborationRouter);
   app.use('/api/workspaces', projectsRouter);
   app.use('/api/workspaces', workspacesRouter);
   const errorHandler: ErrorRequestHandler = (error, _request, response, next) => {
     void next;
     if (error instanceof CoordinationUnavailable) { response.status(503).json({ error: error.message, code: error instanceof RevocationIncomplete ? error.code : 'COORDINATION_UNAVAILABLE' }); return; }
-    console.error(error);
-    response.status(500).json({ error: process.env.NODE_ENV === 'production' ? 'Internal server error' : String(error?.message ?? error) });
+    const status = error?.status === 400 || error?.status === 413 ? error.status : 500;
+    console.error(JSON.stringify({ service: 'api', event: 'request_failed', status }));
+    response.status(status).json({ error: status === 400 ? 'Invalid request body' : status === 413 ? 'Request body too large' : 'Internal server error' });
   };
   app.use(errorHandler);
 

@@ -124,7 +124,7 @@ it('recovers an outage spanning token expiration and restores rooms and REST sta
   expect(state).toHaveBeenLastCalledWith('connected');
   expect(socket.joins).toEqual(['workspace:join:workspace', 'project:join:project', 'workspace:join:workspace', 'project:join:project']);
   expect(invalidate.mock.calls.filter(([filter]) => filter?.queryKey?.[0] === 'presence')).toHaveLength(2);
-  expect(invalidate).toHaveBeenCalledTimes(14);
+  expect(invalidate).toHaveBeenCalledTimes(24);
   expect([...socket.listeners.values()].every((listeners) => listeners.size === 1)).toBe(true);
   expect(connect).toHaveBeenCalledTimes(5);
   cleanup(); cache.clear();
@@ -178,4 +178,19 @@ it('retries temporary refresh failures but stops a rejected post-refresh authent
   expect(state).toHaveBeenLastCalledWith('disconnected');
   expect(connect).toHaveBeenCalledTimes(3); expect(fetchMock).toHaveBeenCalledTimes(3);
   cleanup(); cache.clear();
+});
+
+it('restores the incident room and invalidates each cache once per distinct event', async () => {
+  const socket = new FakeSocket(); const cache = new QueryClient(); const state = vi.fn();
+  const cleanup = bindRealtime(socket as unknown as Socket, 'workspace', undefined, cache, state, 'incident');
+  await vi.waitFor(() => expect(state).toHaveBeenLastCalledWith('connected'));
+  expect(socket.joins).toEqual(['workspace:join:workspace', 'incident:join:incident']);
+  socket.fire('disconnect', 'transport close'); socket.fire('connect');
+  await vi.waitFor(() => expect(socket.joins).toHaveLength(4));
+  const invalidate = vi.spyOn(cache, 'invalidateQueries');
+  socket.fire('incident.timeline_added', { workspaceId: 'workspace', eventId: 'update-1' });
+  socket.fire('incident.timeline_added', { workspaceId: 'workspace', eventId: 'update-1' });
+  expect(invalidate.mock.calls.filter(([options]) => options?.queryKey?.[0] === 'incident-timeline')).toHaveLength(1);
+  expect([...socket.listeners.values()].every((listeners) => listeners.size === 1)).toBe(true);
+  cleanup(); expect([...socket.listeners.values()].every((listeners) => listeners.size === 0)).toBe(true); cache.clear();
 });
