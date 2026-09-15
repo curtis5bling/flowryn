@@ -25,12 +25,20 @@ export const authResponseSchema = z.object({ user: userSchema });
 
 export const registerRequestSchema = z.object({
   name: z.string().trim().min(2).max(80),
-  email: z.string().trim().email().transform((value) => value.toLowerCase()),
+  email: z
+    .string()
+    .trim()
+    .email()
+    .transform((value) => value.toLowerCase()),
   password: z.string().min(8).max(128),
 });
 
 export const loginRequestSchema = z.object({
-  email: z.string().trim().email().transform((value) => value.toLowerCase()),
+  email: z
+    .string()
+    .trim()
+    .email()
+    .transform((value) => value.toLowerCase()),
   password: z.string().min(1).max(128),
 });
 
@@ -39,7 +47,11 @@ export const createWorkspaceRequestSchema = z.object({
 });
 
 export const addWorkspaceMemberRequestSchema = z.object({
-  email: z.string().trim().email().transform((value) => value.toLowerCase()),
+  email: z
+    .string()
+    .trim()
+    .email()
+    .transform((value) => value.toLowerCase()),
   role: workspaceRoleSchema.exclude(['owner']),
 });
 
@@ -52,7 +64,7 @@ export type WorkspaceRole = z.infer<typeof workspaceRoleSchema>;
 export const projectStatusSchema = z.enum(['active', 'archived']);
 export const taskStatusSchema = z.enum(['backlog', 'todo', 'in_progress', 'review', 'done']);
 export const taskPrioritySchema = z.enum(['low', 'medium', 'high', 'urgent']);
-export const activityEntityTypeSchema = z.enum(['project', 'task', 'incident']);
+export const activityEntityTypeSchema = z.enum(['project', 'task', 'incident', 'automation']);
 
 const mongoIdSchema = z.string().regex(/^[a-f\d]{24}$/i, 'Invalid id');
 const optionalDateSchema = z.string().datetime().optional().nullable();
@@ -99,7 +111,10 @@ export const activitySchema = z.object({
 export const createProjectRequestSchema = z.object({
   name: z.string().trim().min(2).max(100),
   description: z.string().trim().max(2000).default(''),
-  color: z.string().regex(/^#[0-9a-f]{6}$/i).default('#d7674d'),
+  color: z
+    .string()
+    .regex(/^#[0-9a-f]{6}$/i)
+    .default('#d7674d'),
 });
 
 export const updateProjectRequestSchema = createProjectRequestSchema.partial();
@@ -136,7 +151,9 @@ export const taskListQuerySchema = z.object({
 
 export const moveTaskRequestSchema = z.object({ status: taskStatusSchema });
 export const reorderTaskRequestSchema = z.object({ position: z.number().finite().min(0) });
-export const assignTaskRequestSchema = z.object({ assigneeId: mongoIdSchema.optional().nullable() });
+export const assignTaskRequestSchema = z.object({
+  assigneeId: mongoIdSchema.optional().nullable(),
+});
 
 export type Project = z.infer<typeof projectSchema>;
 export type Task = z.infer<typeof taskSchema>;
@@ -146,20 +163,101 @@ export type TaskStatus = z.infer<typeof taskStatusSchema>;
 export type TaskPriority = z.infer<typeof taskPrioritySchema>;
 
 export const commentSchema = z.object({
-  id: z.string(), workspaceId: z.string(), projectId: z.string(), taskId: z.string(), authorId: z.string(),
-  body: z.string(), editedAt: z.string().datetime().nullable(), createdAt: z.string().datetime(), updatedAt: z.string().datetime(),
+  id: z.string(),
+  workspaceId: z.string(),
+  projectId: z.string(),
+  taskId: z.string(),
+  authorId: z.string(),
+  body: z.string(),
+  editedAt: z.string().datetime().nullable(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
 });
-export const notificationTypeSchema = z.enum(['task_assigned', 'task_status_changed', 'task_commented', 'project_archived', 'incident_response']);
+export const notificationTypeSchema = z.enum([
+  'task_assigned',
+  'task_status_changed',
+  'task_commented',
+  'project_archived',
+  'incident_response',
+  'automation',
+]);
 export const notificationSchema = z.object({
-  id: z.string(), workspaceId: z.string(), recipientId: z.string(), actorId: z.string(), type: notificationTypeSchema,
-  entityType: activityEntityTypeSchema, entityId: z.string(), title: z.string(), readAt: z.string().datetime().nullable(), createdAt: z.string().datetime(), updatedAt: z.string().datetime(),
+  id: z.string(),
+  workspaceId: z.string(),
+  recipientId: z.string(),
+  actorId: z.string(),
+  type: notificationTypeSchema,
+  entityType: activityEntityTypeSchema,
+  entityId: z.string(),
+  title: z.string(),
+  readAt: z.string().datetime().nullable(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
 });
-export const realtimeEventNameSchema = z.enum(['task.created', 'task.updated', 'task.moved', 'task.reordered', 'task.assigned', 'task.deleted', 'project.created', 'project.updated', 'project.archived', 'comment.created', 'comment.updated', 'comment.deleted', 'notification.created', 'presence.updated', 'incident.declared', 'incident.updated', 'incident.severity_changed', 'incident.status_changed', 'incident.commander_changed', 'incident.responder_changed', 'incident.timeline_added', 'incident.runbook_attached', 'incident.step_completed', 'incident.resolved', 'incident.reopened']);
-export const realtimeEventSchema = z.object({ eventId: z.string(), timestamp: z.string().datetime(), workspaceId: mongoIdSchema, projectId: mongoIdSchema.optional(), incidentId: mongoIdSchema.optional(), entityId: mongoIdSchema.optional(), actorId: mongoIdSchema, type: realtimeEventNameSchema, payload: z.record(z.string(), z.unknown()) });
+export const realtimeEventNameSchema = z.enum([
+  'task.created',
+  'task.updated',
+  'task.moved',
+  'task.reordered',
+  'task.assigned',
+  'task.deleted',
+  'project.created',
+  'project.updated',
+  'project.archived',
+  'comment.created',
+  'comment.updated',
+  'comment.deleted',
+  'notification.created',
+  'presence.updated',
+  'incident.declared',
+  'incident.updated',
+  'incident.severity_changed',
+  'incident.status_changed',
+  'incident.commander_changed',
+  'incident.responder_changed',
+  'incident.timeline_added',
+  'incident.runbook_attached',
+  'incident.step_completed',
+  'incident.resolved',
+  'incident.reopened',
+  'automation.ruleCreated',
+  'automation.ruleUpdated',
+  'automation.ruleEnabled',
+  'automation.ruleDisabled',
+  'automation.ruleArchived',
+  'automation.runQueued',
+  'automation.runStarted',
+  'automation.runCompleted',
+  'automation.runSkipped',
+  'automation.runFailed',
+  'integration.healthChanged',
+  'integration.deliveryFailed',
+]);
+export const realtimeEventSchema = z.object({
+  eventId: z.string(),
+  timestamp: z.string().datetime(),
+  workspaceId: mongoIdSchema,
+  projectId: mongoIdSchema.optional(),
+  incidentId: mongoIdSchema.optional(),
+  entityId: mongoIdSchema.optional(),
+  actorId: mongoIdSchema,
+  type: realtimeEventNameSchema,
+  payload: z.record(z.string(), z.unknown()),
+});
 export const createCommentRequestSchema = z.object({ body: z.string().trim().min(1).max(2000) });
 export const updateCommentRequestSchema = createCommentRequestSchema;
-export const notificationListQuerySchema = z.object({ page: z.coerce.number().int().min(1).default(1), limit: z.coerce.number().int().min(1).max(100).default(20), unread: z.enum(['true', 'false']).transform((value) => value === 'true').optional() });
-export const commentListQuerySchema = z.object({ page: z.coerce.number().int().min(1).default(1), limit: z.coerce.number().int().min(1).max(100).default(50) });
+export const notificationListQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  unread: z
+    .enum(['true', 'false'])
+    .transform((value) => value === 'true')
+    .optional(),
+});
+export const commentListQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+});
 export type Comment = z.infer<typeof commentSchema>;
 export type Notification = z.infer<typeof notificationSchema>;
 export type RealtimeEvent = z.infer<typeof realtimeEventSchema>;
@@ -174,6 +272,12 @@ export const socketPayloadSchemas = {
   'incident:leave': mongoIdSchema,
 } as const;
 export type SocketRequest = keyof typeof socketPayloadSchemas;
-export type SocketAcknowledgement = { ok: true; users?: string[] } | { ok: false; error: { code: 'INVALID_PAYLOAD' | 'UNAUTHORIZED' | 'UNAVAILABLE'; message: string } };
+export type SocketAcknowledgement =
+  | { ok: true; users?: string[] }
+  | {
+      ok: false;
+      error: { code: 'INVALID_PAYLOAD' | 'UNAUTHORIZED' | 'UNAVAILABLE'; message: string };
+    };
 
 export * from './incidents.js';
+export * from './automation.js';

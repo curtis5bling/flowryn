@@ -139,3 +139,90 @@ input:focus { border-color: #d7674d; box-shadow: 0 0 0 3px #d7674d22; }
 .incident-content table { border-collapse:collapse; width:100%; }
 .incident-content th,.incident-content td { text-align:left; padding:.5rem; border-bottom:1px solid #ddd; }
 @media(max-width:640px) { .incident-content { padding:1rem; } .incident-filters>* { width:100%; } .incident-app .topbar { flex-wrap:wrap; gap:.6rem; } }
+
+/* Automation uses the same native controls and explicit states as workspace views. */
+.automation-page {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 24px;
+}
+.automation-page header,
+.automation-page nav {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.automation-page h1 {
+  font-size: clamp(1.4rem, 4vw, 2rem);
+}
+.automation-panel {
+  background: var(--surface, #fff);
+  border: 1px solid #dedbd3;
+  border-radius: 12px;
+  padding: 20px;
+  margin: 16px 0;
+}
+.automation-panel form,
+.automation-panel fieldset {
+  display: grid;
+  gap: 12px;
+}
+.automation-panel fieldset {
+  min-width: 0;
+  border: 1px solid #dedbd3;
+  padding: 14px;
+}
+.automation-page label {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0;
+}
+.automation-page input,
+.automation-page select,
+.automation-page textarea {
+  max-width: 100%;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid #aaa;
+  border-radius: 6px;
+}
+.automation-page input[type='checkbox'] {
+  width: auto;
+}
+.automation-page button {
+  margin: 4px;
+  padding: 8px 12px;
+  border: 1px solid #aaa;
+  border-radius: 6px;
+}
+.automation-page button:focus-visible,
+.automation-page input:focus-visible,
+.automation-page select:focus-visible {
+  outline: 3px solid #315ca7;
+  outline-offset: 2px;
+}
+.automation-page button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.automation-secret {
+  display: block;
+  overflow-wrap: anywhere;
+  font-family: monospace;
+  user-select: all;
+  padding: 12px;
+  background: #fff4de;
+}
+@media (max-width: 600px) {
+  .automation-page {
+    padding: 12px;
+  }
+  .automation-panel {
+    padding: 12px;
+  }
+  .automation-panel fieldset {
+    padding: 8px;
+  }
+}

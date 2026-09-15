@@ -7,6 +7,8 @@
     "build": "tsc -p tsconfig.build.json",
     "dev": "tsx watch src/server.ts",
     "start": "node dist/server.js",
+    "worker:dev": "tsx watch src/automation/worker.ts",
+    "worker:start": "node dist/automation/worker.js",
     "test": "npm run build -w @flowryn/shared && vitest run --passWithNoTests",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

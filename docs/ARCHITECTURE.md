@@ -1,5 +1,7 @@
 # Architecture
 
+Milestone 6 adds an independently deployed MongoDB automation worker. Domain services append transactional outbox events, event workers snapshot evaluated rules into unique runs, and action workers commit database effects and completion receipts together under lease fencing. Generic webhook records store authenticated-encrypted credentials and sanitized delivery histories. Redis carries optional typed empty-payload invalidation hints; run/integration hints are restricted to administrator private rooms. See [Automation architecture, contracts and operational semantics](AUTOMATION.md).
+
 Flowryn uses npm workspaces to keep independently deployable applications and reusable contracts in one repository.
 
 ```text
@@ -50,7 +52,6 @@ MongoDB is the source of truth for durable work data. Redis provides short-lived
 ## Refresh rotation recovery
 
 AuthSession is one atomic document across rotations. A compare-and-swap claims the current token ID/hash using `rotationOperationId` and a 30-second `rotationExpiresAt` lease computed by MongoDB. Claiming disables access for that generation while preserving the refresh hash. After revocation acknowledgements, a second compare-and-swap checks the same operation, unexpired lease, current hash and non-revoked session, then changes token ID/hash, increments version, and clears the claim. Only committed credentials reach the caller. Failure cleanup matches the operation ID; it cannot release a later claim. Expired claims are recoverable without reviving old access tokens. Busy claims are retryable 503 responses, while old hashes after a completed rotation are rejected as invalid. An ambiguous database write is checked against the exact candidate token ID/hash before returning any credentials.
-
 
 ## Incident management and operational response
 

@@ -26,10 +26,14 @@
 - [x] Replica-set integration tests for concurrency, rollback, authorization, history and live isolation
 - [x] Frontend declaration, resolution, runbook ordering and reconnect tests
 
-## Next automation milestones
+## Milestone 6: Workflow automation and integrations
 
-- [ ] Workflow builder with trigger, condition, and action nodes
-- [ ] Redis-backed job execution and activity history
+- [x] Versioned structured rules and controlled workspace actions
+- [x] MongoDB transactional outbox, leased workers and action-level execution history
+- [x] Idempotent effects, causal loop prevention, retry and dead-letter controls
+- [x] Encrypted generic integrations, signed alert ingestion and protected outbound webhooks
+- [x] Automation management interface, private realtime hints and server-side metrics
+- [x] Replica-set automation regressions and mocked network security tests
 
 ## Later
 
