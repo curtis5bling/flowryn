@@ -10,6 +10,13 @@ import {
 import mongoose, { type ClientSession } from 'mongoose';
 import type { z } from 'zod';
 
+import { emitDomainEvent, incidentTriggerNames } from '../automation/outbox.js';
+import {
+  automationActorId,
+  automationPrincipal,
+  systemIncidentActions,
+  type AutomationContext,
+} from '../automation/principal.js';
 import { ActivityModel } from '../models/Activity.js';
 import { IncidentCounterModel, IncidentModel } from '../models/Incident.js';
 import { IncidentEventModel } from '../models/IncidentEvent.js';
@@ -106,12 +113,16 @@ type CommandInput = {
   incidentId?: string;
   declaration?: Declaration;
   mutation?: IncidentCommand;
+  session?: ClientSession;
+  automation?: AutomationContext;
 };
 export const executeIncident = async (input: CommandInput) => {
   const { workspaceId, actorId, incidentId, declaration, mutation } = input;
   const operationId = declaration?.operationId ?? mutation!.operationId;
-  const requestHash = createHash('sha256').update(JSON.stringify(input)).digest('hex');
-  if (declaration) {
+  const requestHash = createHash('sha256')
+    .update(JSON.stringify({ workspaceId, actorId, incidentId, declaration, mutation }))
+    .digest('hex');
+  if (declaration && !input.session) {
     // Seed outside the transaction; increments themselves are transactional.
     try {
       await IncidentCounterModel.updateOne(
@@ -123,10 +134,24 @@ export const executeIncident = async (input: CommandInput) => {
       if ((error as { code?: number }).code !== 11000) throw error;
     }
   }
-  const session = await mongoose.startSession();
+  const session = input.session ?? (await mongoose.startSession());
   try {
-    const result = await session.withTransaction(async () => {
-      const actor = await incidentActor(workspaceId, actorId, session);
+    const transaction = async () => {
+      const system =
+        input.automation?.principal === automationPrincipal && actorId === automationActorId;
+      if (input.automation)
+        assertIncident(
+          system && (declaration || systemIncidentActions.has(mutation!.command.action)),
+          403,
+          'System action denied',
+        );
+      if (system && mutation?.command.action === 'edit')
+        assertIncident(
+          Object.keys(mutation.command.fields).every((key) => key === 'severity'),
+          403,
+          'System field denied',
+        );
+      const actor = system ? { admin: true } : await incidentActor(workspaceId, actorId, session);
       const previous = await IncidentEventModel.findOne({ workspaceId, operationId })
         .select('+requestHash')
         .session(session);
@@ -178,7 +203,7 @@ export const executeIncident = async (input: CommandInput) => {
         const counter = await IncidentCounterModel.findOneAndUpdate(
           { _id: workspaceId },
           { $inc: { value: 1 } },
-          { new: true, session },
+          { new: true, session, upsert: true, setDefaultsOnInsert: false },
         );
         assertIncident(counter, 503, 'Incident counter unavailable');
         incident = new IncidentModel({
@@ -362,7 +387,17 @@ export const executeIncident = async (input: CommandInput) => {
             nextValue,
             operationId,
             requestHash,
-            metadata: { ...metadata, severity: incident.severity, status: incident.status },
+            metadata: {
+              ...metadata,
+              severity: incident.severity,
+              status: incident.status,
+              ...(system
+                ? {
+                    executionIdentity: 'flowryn:automation:v1',
+                    configuredBy: input.automation!.configuredBy,
+                  }
+                : {}),
+            },
           },
         ],
         { session },
@@ -375,7 +410,17 @@ export const executeIncident = async (input: CommandInput) => {
             entityType: 'incident',
             entityId: incident.id,
             action: type,
-            metadata: { severity: incident.severity, status: incident.status },
+            metadata: {
+              severity: incident.severity,
+              status: incident.status,
+              ...(system
+                ? {
+                    executionIdentity: 'flowryn:automation:v1',
+                    configuredBy: input.automation!.configuredBy,
+                    initiatedBy: input.automation!.initiatedBy,
+                  }
+                : {}),
+            },
           },
         ],
         { session },
@@ -421,10 +466,49 @@ export const executeIncident = async (input: CommandInput) => {
           })),
           { session, ordered: true },
         );
+      await emitDomainEvent(session, {
+        workspaceId,
+        aggregateType: 'incident',
+        aggregateId: incident.id,
+        eventType: incidentTriggerNames[type] ?? type,
+        eventId: operationId,
+        context: input.automation,
+        payload: {
+          actorId,
+          incidentId: incident.id,
+          severity: incident.severity as 'sev1' | 'sev2' | 'sev3' | 'sev4',
+          incidentStatus: incident.status as IncidentStatus,
+          commanderId: incident.commanderId,
+          responderIds: [...incident.responderIds],
+          projectIds: [...incident.linkedProjectIds],
+          declaredAt: incident.declaredAt.toISOString(),
+          ...(incident.linkedProjectIds[0] ? { projectId: incident.linkedProjectIds[0] } : {}),
+        },
+      });
+      if (type === 'incident.resolved' || type === 'incident.reopened')
+        await emitDomainEvent(session, {
+          workspaceId,
+          aggregateType: 'incident',
+          aggregateId: incident.id,
+          eventType: 'incident.statusChanged',
+          eventId: `${operationId}:incident.statusChanged`,
+          context: input.automation,
+          payload: {
+            actorId,
+            incidentId: incident.id,
+            severity: incident.severity as 'sev1' | 'sev2' | 'sev3' | 'sev4',
+            incidentStatus: incident.status as IncidentStatus,
+            commanderId: incident.commanderId,
+            responderIds: [...incident.responderIds],
+            projectIds: [...incident.linkedProjectIds],
+            declaredAt: incident.declaredAt.toISOString(),
+          },
+        });
       return { incident, type, recipients, replay: false };
-    });
+    };
+    const result = input.session ? await transaction() : await session.withTransaction(transaction);
     assertIncident(result, 503, 'Incident transaction unavailable');
-    if (!result.replay) {
+    if (!result.replay && !input.session) {
       const event = {
         workspaceId,
         incidentId: result.incident.id,
@@ -443,6 +527,6 @@ export const executeIncident = async (input: CommandInput) => {
     }
     return result.incident;
   } finally {
-    await session.endSession();
+    if (!input.session) await session.endSession();
   }
 };

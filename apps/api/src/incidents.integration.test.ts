@@ -14,6 +14,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 
 import { createApp } from './app.js';
 import { issueTokens } from './auth/tokens.js';
+import { automationHintSchema } from './automation/hints.js';
 import { IncidentCounterModel, IncidentModel } from './models/Incident.js';
 import { IncidentEventModel } from './models/IncidentEvent.js';
 import { NotificationModel } from './models/Notification.js';
@@ -23,7 +24,7 @@ import { TaskModel } from './models/Task.js';
 import { UserModel } from './models/User.js';
 import { WorkspaceModel } from './models/Workspace.js';
 import { WorkspaceMemberModel } from './models/WorkspaceMember.js';
-import { createRealtimeGateway, getPresence } from './realtime/gateway.js';
+import { createRealtimeGateway, getPresence, relayAutomationHint } from './realtime/gateway.js';
 
 const app = createApp();
 const server = createServer(app);
@@ -130,11 +131,60 @@ const fixture = async () => {
 };
 
 describe('transactional incident response', () => {
+  it('restricts automation failures to administrator private rooms and rule hints to authorized workspaces', async () => {
+    const f = await fixture();
+    const owner = await socketClient(f.tokens[0]!.accessToken),
+      member = await socketClient(f.tokens[2]!.accessToken),
+      outsider = await socketClient(f.tokens[3]!.accessToken);
+    await ack(owner, 'workspace:join', f.workspace.id);
+    await ack(member, 'workspace:join', f.workspace.id);
+    await ack(outsider, 'workspace:join', f.other.id);
+    const ownerFailures = vi.fn(),
+      memberFailures = vi.fn(),
+      outsideFailures = vi.fn(),
+      memberRules = vi.fn(),
+      outsideRules = vi.fn();
+    owner.on('automation.runFailed', ownerFailures);
+    member.on('automation.runFailed', memberFailures);
+    outsider.on('automation.runFailed', outsideFailures);
+    member.on('automation.ruleCreated', memberRules);
+    outsider.on('automation.ruleCreated', outsideRules);
+    const hint = automationHintSchema.parse({
+      eventId: randomUUID(),
+      timestamp: new Date().toISOString(),
+      workspaceId: f.workspace.id,
+      entityId: f.workspace.id,
+      actorId: f.owner.id,
+      type: 'automation.runFailed',
+      payload: {},
+    });
+    await relayAutomationHint(hint);
+    await relayAutomationHint({ ...hint, eventId: randomUUID(), type: 'automation.ruleCreated' });
+    await vi.waitFor(() => {
+      expect(ownerFailures).toHaveBeenCalledTimes(1);
+      expect(memberRules).toHaveBeenCalledTimes(1);
+    });
+    expect(memberFailures).not.toHaveBeenCalled();
+    expect(outsideFailures).not.toHaveBeenCalled();
+    expect(outsideRules).not.toHaveBeenCalled();
+    expect(ownerFailures.mock.calls[0]![0].payload).toEqual({});
+    expect(
+      automationHintSchema.safeParse({ ...hint, payload: { signingSecret: 'secret' } }).success,
+    ).toBe(false);
+  });
   it('sanitizes malformed-body failures without logging incident narrative', async () => {
-    const f = await fixture(); const log = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const response = await request(app).post(f.base).set('Authorization', `Bearer ${f.tokens[0]!.accessToken}`).set('Content-Type', 'application/json').send('{"summary":"private operational details"');
-    expect(response.status).toBe(400); expect(response.body.error).toBe('Invalid request body');
-    expect(log).toHaveBeenCalledWith(JSON.stringify({ service: 'api', event: 'request_failed', status: 400 }));
+    const f = await fixture();
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const response = await request(app)
+      .post(f.base)
+      .set('Authorization', `Bearer ${f.tokens[0]!.accessToken}`)
+      .set('Content-Type', 'application/json')
+      .send('{"summary":"private operational details"');
+    expect(response.status).toBe(400);
+    expect(response.body.error).toBe('Invalid request body');
+    expect(log).toHaveBeenCalledWith(
+      JSON.stringify({ service: 'api', event: 'request_failed', status: 400 }),
+    );
     expect(JSON.stringify(log.mock.calls)).not.toContain('private operational details');
   });
 
@@ -144,7 +194,12 @@ describe('transactional incident response', () => {
     expect(results.map((result) => result.status)).toEqual(Array(8).fill(201));
     expect(new Set(results.map((result) => result.body.incident.incidentNumber)).size).toBe(8);
     expect((await IncidentCounterModel.findById(f.workspace.id))?.value).toBe(8);
-    const body = declaration({ severity: 'sev1', confirmSev1: true, commanderId: f.commander.id, responderIds: [f.member.id] });
+    const body = declaration({
+      severity: 'sev1',
+      confirmSev1: true,
+      commanderId: f.commander.id,
+      responderIds: [f.member.id],
+    });
     const first = await f.post(f.base, body);
     const second = await f.post(f.base, body);
     expect(first.status).toBe(201);
