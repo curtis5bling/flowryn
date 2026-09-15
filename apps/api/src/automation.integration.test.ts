@@ -161,6 +161,18 @@ const executeNext = async (adapters?: NetworkAdapters) => {
   return AutomationRunModel.findById(run!._id);
 };
 describe('automation authorization and workspace boundaries', () => {
+  it('terminates an invalid persisted snapshot without effects or repeated claims', async () => {
+    const f = await fixture();
+    const rule = await ruleFor(f);
+    const queued = await queue(f, rule);
+    await AutomationRunModel.updateOne({ _id: queued!._id }, { ruleSnapshot: { version: 99 } });
+    const result = await executeNext();
+    expect(result!.status).toBe('failed');
+    expect(result!.error).toBe('INVALID_RULE_SNAPSHOT');
+    expect(result!.leaseOwner).toBeUndefined();
+    expect(await TaskModel.countDocuments()).toBe(0);
+    expect(await claimRun('next')).toBeNull();
+  });
   it('deduplicates an ambiguous manual retry even when the target state changed', async () => {
     const f = await fixture();
     const task = await executeTask({

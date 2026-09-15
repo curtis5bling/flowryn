@@ -9,10 +9,12 @@ import {
   updateProjectRequestSchema,
   updateTaskRequestSchema,
 } from '@flowryn/shared';
-import { Router } from 'express';
+import { Router, type ErrorRequestHandler } from 'express';
 import { Types } from 'mongoose';
+import { ZodError } from 'zod';
 
 import { executeTask } from '../automation/tasks.js';
+import { IncidentError } from '../incidents/service.js';
 import { requireAuth, requireWorkspaceRole } from '../middleware/auth.js';
 import { validateBody } from '../middleware/validation.js';
 import { ActivityModel } from '../models/Activity.js';
@@ -433,11 +435,23 @@ router.patch(
       workspaceId: request.params.workspaceId as string,
       taskId: request.params.taskId as string,
       actorId: request.auth!.userId,
-      fields: request.body,
+      fields: { assigneeId: request.body.assigneeId ?? null },
       realtimeType: 'task.assigned',
     });
     return response.json({ task: serialize(task.toObject()) });
   },
 );
 
+const taskErrors: ErrorRequestHandler = (error, _request, response, next) => {
+  if (error instanceof IncidentError) {
+    response.status(error.status).json({ error: error.message });
+    return;
+  }
+  if (error instanceof ZodError) {
+    response.status(400).json({ error: 'Invalid task request' });
+    return;
+  }
+  next(error);
+};
+router.use(taskErrors);
 export default router;

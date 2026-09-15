@@ -127,7 +127,8 @@ describe('projects, tasks, and activity', () => {
     expect(reordered.body.task.position).toBe(12);
     const unassigned = await member
       .patch(`/api/workspaces/${workspaceId}/tasks/${first.id}/assignee`)
-      .send({ assigneeId: null });
+      .send({});
+    expect(unassigned.status).toBe(200);
     expect(unassigned.body.task.assigneeId).toBeNull();
     const invalidAssignee = await member
       .patch(`/api/workspaces/${workspaceId}/tasks/${first.id}/assignee`)
@@ -154,6 +155,18 @@ describe('projects, tasks, and activity', () => {
     expect(crossProject.status).toBe(404);
     const crossTask = await ownerA.get(`/api/workspaces/${workspaceA}/tasks/${taskB.id}`);
     expect(crossTask.status).toBe(404);
+    const crossMutation = await ownerA
+      .patch(`/api/workspaces/${workspaceA}/tasks/${taskB.id}/status`)
+      .send({ status: 'done' });
+    expect(crossMutation.status).toBe(404);
+    const missingProject = await ownerA
+      .post(`/api/workspaces/${workspaceA}/projects/${new mongoose.Types.ObjectId()}/tasks`)
+      .send({ title: 'Missing project task' });
+    expect(missingProject.status).toBe(404);
+    const invalidTask = await ownerA
+      .patch(`/api/workspaces/${workspaceA}/tasks/invalid/status`)
+      .send({ status: 'done' });
+    expect(invalidTask.status).toBe(400);
     const crossActivity = await ownerA.get(
       `/api/workspaces/${workspaceA}/projects/${projectA}/activity`,
     );
