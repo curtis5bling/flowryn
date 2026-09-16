@@ -160,13 +160,43 @@ describe('transactional incident response', () => {
     });
     await relayAutomationHint(hint);
     await relayAutomationHint({ ...hint, eventId: randomUUID(), type: 'automation.ruleCreated' });
+    const ownerEscalationFailures = vi.fn(),
+      memberEscalationFailures = vi.fn(),
+      outsideAlerts = vi.fn(),
+      memberAlerts = vi.fn(),
+      ownerPages = vi.fn(),
+      memberPages = vi.fn();
+    owner.on('escalation.deliveryFailed', ownerEscalationFailures);
+    member.on('escalation.deliveryFailed', memberEscalationFailures);
+    outsider.on('alert.opened', outsideAlerts);
+    member.on('alert.opened', memberAlerts);
+    owner.on('notification.created', ownerPages);
+    member.on('notification.created', memberPages);
+    await relayAutomationHint({
+      ...hint,
+      eventId: randomUUID(),
+      type: 'escalation.deliveryFailed',
+    });
+    await relayAutomationHint({ ...hint, eventId: randomUUID(), type: 'alert.opened' });
+    await relayAutomationHint({
+      ...hint,
+      eventId: randomUUID(),
+      type: 'notification.created',
+      recipientId: f.member.id,
+    });
     await vi.waitFor(() => {
       expect(ownerFailures).toHaveBeenCalledTimes(1);
       expect(memberRules).toHaveBeenCalledTimes(1);
+      expect(ownerEscalationFailures).toHaveBeenCalledTimes(1);
+      expect(memberAlerts).toHaveBeenCalledTimes(1);
+      expect(memberPages).toHaveBeenCalledTimes(1);
     });
     expect(memberFailures).not.toHaveBeenCalled();
     expect(outsideFailures).not.toHaveBeenCalled();
     expect(outsideRules).not.toHaveBeenCalled();
+    expect(memberEscalationFailures).not.toHaveBeenCalled();
+    expect(outsideAlerts).not.toHaveBeenCalled();
+    expect(ownerPages).not.toHaveBeenCalled();
     expect(ownerFailures.mock.calls[0]![0].payload).toEqual({});
     expect(
       automationHintSchema.safeParse({ ...hint, payload: { signingSecret: 'secret' } }).success,

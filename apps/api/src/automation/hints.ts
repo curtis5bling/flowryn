@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { incidentIdSchema, realtimeEventNameSchema } from '@flowryn/shared';
+import { incidentIdSchema, oncallEventNames, realtimeEventNameSchema } from '@flowryn/shared';
 import { Redis } from 'ioredis';
 import { z } from 'zod';
 
@@ -17,6 +17,7 @@ export const automationHintNames = [
   'automation.runFailed',
   'integration.healthChanged',
   'integration.deliveryFailed',
+  ...oncallEventNames,
 ] as const;
 export const automationHintSchema = z
   .object({

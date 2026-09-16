@@ -1,5 +1,7 @@
 # Workflow automation and generic integrations
 
+Milestone 7 reuses this worker and transport for on-call escalation. Rules additionally support `alert.create`; `alert.opened` and `alert.occurrenceAdded` are transactional triggers. Integration outbound allowlists may include `escalation.advanced` for on-call webhooks. Signed inbound version 2 creates routed alerts while version 1 remains compatible. See [on-call alert contracts and delivery guarantees](ONCALL.md).
+
 ## Processes and deployment
 
 The API accepts domain mutations and management commands. A separate worker polls MongoDB for durable events and runs; execution survives API process restarts. Start infrastructure with `docker compose up -d --wait`, then `npm run dev`. Start the worker separately with `npm run worker:dev -w @flowryn/api`. Production uses `npm run build`, `npm run start -w @flowryn/api`, and `npm run worker:start -w @flowryn/api` in independently supervised processes. Multiple workers may share the same database. Every worker generates a unique UUID.

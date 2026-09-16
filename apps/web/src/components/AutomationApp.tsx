@@ -44,10 +44,13 @@ const actionNames: AutomationAction['type'][] = [
   'incident.transition',
   'webhook.invoke',
   'incident.declare',
+  'alert.create',
 ];
 const newAction = (type: AutomationAction['type']): AutomationAction => {
   const id = crypto.randomUUID();
   switch (type) {
+    case 'alert.create':
+      return { id, type, title: '', fingerprint: '', severity: 'sev3' };
     case 'incident.timeline':
       return { id, type, message: '' };
     case 'task.create':
@@ -301,6 +304,17 @@ function ActionFields({
             maxLength={4000}
             value={action.message}
             onChange={(e) => change({ message: e.target.value })}
+          />
+        </label>
+      )}
+      {action.type === 'alert.create' && (
+        <label>
+          Alert fingerprint
+          <input
+            required
+            maxLength={160}
+            value={action.fingerprint}
+            onChange={(e) => change({ fingerprint: e.target.value })}
           />
         </label>
       )}

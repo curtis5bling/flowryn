@@ -77,6 +77,7 @@ export const bindRealtime = (
       'automation-deliveries',
       'automation-dead-letters',
       'automation-metrics',
+      'oncall',
     ]) {
       void queryClient.invalidateQueries({
         queryKey: [key, workspaceId],

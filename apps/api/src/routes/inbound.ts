@@ -1,8 +1,8 @@
 import { automationPayloadSchema, inboundAlertSchema, incidentIdSchema } from '@flowryn/shared';
 import { Router, raw, type ErrorRequestHandler } from 'express';
-import mongoose from 'mongoose';
 import { z } from 'zod';
 
+import { publishAutomationHint } from '../automation/hints.js';
 import {
   AutomationRuleModel,
   InboundBucketModel,
@@ -10,9 +10,10 @@ import {
   WebhookDeliveryModel,
 } from '../automation/models.js';
 import { emitDomainEvent } from '../automation/outbox.js';
-import { automationActorId } from '../automation/principal.js';
+import { automationActorId, automationPrincipal } from '../automation/principal.js';
 import { decryptSecret, verifySignature } from '../automation/security.js';
 import { IncidentModel } from '../models/Incident.js';
+import { createAlert, transact } from '../oncall/service.js';
 
 const router = Router();
 const path = '/:workspaceId/:integrationId';
@@ -81,56 +82,79 @@ router.post(
         deny();
         return;
       }
-      const session = await mongoose.startSession();
-      try {
-        await session.withTransaction(async () => {
-          const active = await IntegrationModel.findOne({
+      let openedAlert: { id: string; duplicate: boolean } | undefined;
+      await transact(async (session) => {
+        const active = await IntegrationModel.findOne({
+          workspaceId,
+          _id: integrationId,
+          status: 'active',
+          archivedAt: null,
+          secretVersion: integration.secretVersion,
+        }).session(session);
+        if (!active) throw new Error('Rejected');
+        // Fence concurrent archive/rotation against ingestion.
+        await IntegrationModel.updateOne(
+          { workspaceId, _id: integrationId },
+          { $set: { lastDeliveryAt: new Date() } },
+          { session },
+        );
+        const rules = await AutomationRuleModel.exists({
+          workspaceId,
+          triggerType: 'automation.manual',
+          inboundIntegrationId: integrationId,
+          enabled: true,
+          archivedAt: null,
+        }).session(session);
+        if (alert.data.schemaVersion === 1 && !rules) throw new Error('Rejected');
+        if (
+          await WebhookDeliveryModel.exists({
             workspaceId,
-            _id: integrationId,
-            status: 'active',
-            archivedAt: null,
-            secretVersion: integration.secretVersion,
-          }).session(session);
-          if (!active) throw new Error('Rejected');
-          // Fence concurrent archive/rotation against ingestion.
-          await IntegrationModel.updateOne(
-            { workspaceId, _id: integrationId },
-            { $set: { lastDeliveryAt: new Date() } },
-            { session },
-          );
-          const rules = await AutomationRuleModel.exists({
-            workspaceId,
-            triggerType: 'automation.manual',
-            inboundIntegrationId: integrationId,
-            enabled: true,
-            archivedAt: null,
-          }).session(session);
-          if (!rules) throw new Error('Rejected');
-          if (
-            await WebhookDeliveryModel.exists({
-              workspaceId,
-              integrationId,
-              direction: 'inbound',
-              deliveryId,
-            }).session(session)
-          )
-            throw new Error('Rejected');
-          if (
-            alert.data.incidentId &&
-            !(await IncidentModel.exists({
-              workspaceId,
-              _id: alert.data.incidentId,
-              archivedAt: null,
-            }).session(session))
-          )
-            throw new Error('Rejected');
-          const payload = automationPayloadSchema.parse({
-            actorId: automationActorId,
             integrationId,
-            severity: alert.data.severity,
-            ...(alert.data.incidentId ? { incidentId: alert.data.incidentId } : {}),
-            ...(alert.data.status ? { incidentStatus: alert.data.status } : {}),
+            direction: 'inbound',
+            deliveryId,
+          }).session(session)
+        )
+          throw new Error('Rejected');
+        if (
+          alert.data.incidentId &&
+          !(await IncidentModel.exists({
+            workspaceId,
+            _id: alert.data.incidentId,
+            archivedAt: null,
+          }).session(session))
+        )
+          throw new Error('Rejected');
+        if (alert.data.schemaVersion === 2) {
+          const result = await createAlert({
+            workspaceId,
+            actorId: automationActorId,
+            session,
+            automation: {
+              principal: automationPrincipal,
+              configuredBy: String(active.createdBy),
+              correlationId: deliveryId,
+              causationId: deliveryId,
+              chainDepth: 0,
+              rulePath: [],
+            },
+            fields: {
+              operationId: deliveryId,
+              fingerprint: alert.data.fingerprint,
+              title: alert.data.title,
+              summary: alert.data.summary,
+              severity: alert.data.severity,
+              sourceIntegrationId: integrationId,
+              ...(alert.data.incidentId ? { linkedIncidentId: alert.data.incidentId } : {}),
+              ...(alert.data.externalEventId
+                ? { externalEventId: alert.data.externalEventId }
+                : {}),
+              ...(alert.data.projectId ? { projectId: alert.data.projectId } : {}),
+              ...(alert.data.serviceId ? { serviceId: alert.data.serviceId } : {}),
+              labels: alert.data.labels,
+            },
           });
+          if (!result) throw new Error('Rejected');
+          openedAlert = { id: result.alert.id, duplicate: result.duplicate };
           await WebhookDeliveryModel.create(
             [
               {
@@ -145,18 +169,45 @@ router.post(
             ],
             { session },
           );
-          await emitDomainEvent(session, {
-            workspaceId,
-            eventType: 'automation.manual',
-            aggregateType: 'integration',
-            aggregateId: integrationId,
-            eventId: deliveryId,
-            payload,
-          });
+          return;
+        }
+        const payload = automationPayloadSchema.parse({
+          actorId: automationActorId,
+          integrationId,
+          severity: alert.data.severity,
+          ...(alert.data.incidentId ? { incidentId: alert.data.incidentId } : {}),
+          ...(alert.data.status ? { incidentStatus: alert.data.status } : {}),
         });
-      } finally {
-        await session.endSession();
-      }
+        await WebhookDeliveryModel.create(
+          [
+            {
+              workspaceId,
+              integrationId,
+              direction: 'inbound',
+              deliveryId,
+              eventId: deliveryId,
+              eventType: 'alert.received',
+              status: 'succeeded',
+            },
+          ],
+          { session },
+        );
+        await emitDomainEvent(session, {
+          workspaceId,
+          eventType: 'automation.manual',
+          aggregateType: 'integration',
+          aggregateId: integrationId,
+          eventId: deliveryId,
+          payload,
+        });
+      });
+      if (openedAlert)
+        publishAutomationHint({
+          workspaceId,
+          actorId: automationActorId,
+          entityId: openedAlert.id,
+          type: openedAlert.duplicate ? 'alert.occurrenceAdded' : 'alert.opened',
+        });
       response.status(202).json({ accepted: true });
     } catch {
       deny();

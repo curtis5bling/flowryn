@@ -11,6 +11,7 @@ import { createRoot } from 'react-dom/client';
 import { createWorkspace, getCurrentUser, listWorkspaces, login, logout, register } from './api';
 import { AutomationApp } from './components/AutomationApp';
 import { IncidentApp } from './components/IncidentApp';
+import { OncallApp } from './components/OncallApp';
 import { WorkspaceApp } from './components/WorkspaceApp';
 import './styles.css';
 
@@ -165,7 +166,7 @@ function App() {
     queryFn: listWorkspaces,
     enabled: Boolean(me.data),
   });
-  const [area, setArea] = useState<'projects' | 'incidents' | 'automation'>('projects');
+  const [area, setArea] = useState<'projects' | 'incidents' | 'automation' | 'oncall'>('projects');
   const [authMode, setAuthMode] = useState<AuthMode>('login');
   const [showOnboarding, setShowOnboarding] = useState(false);
   const logoutMutation = useMutation({
@@ -213,8 +214,19 @@ function App() {
         <button aria-pressed={area === 'automation'} onClick={() => setArea('automation')}>
           Automation
         </button>
+        <button aria-pressed={area === 'oncall'} onClick={() => setArea('oncall')}>
+          On-Call
+        </button>
       </nav>
-      {area === 'automation' ? (
+      {area === 'oncall' ? (
+        <OncallApp
+          workspaceId={activeWorkspace.id}
+          workspaceName={activeWorkspace.name}
+          userId={me.data.user.id}
+          role={activeWorkspace.role}
+          onLogout={() => logoutMutation.mutate()}
+        />
+      ) : area === 'automation' ? (
         <AutomationApp
           workspaceId={activeWorkspace.id}
           workspaceName={activeWorkspace.name}

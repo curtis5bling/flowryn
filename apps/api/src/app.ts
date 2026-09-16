@@ -10,6 +10,7 @@ import automationRouter from './routes/automation.js';
 import collaborationRouter from './routes/collaboration.js';
 import inboundRouter from './routes/inbound.js';
 import incidentsRouter from './routes/incidents.js';
+import oncallRouter from './routes/oncall.js';
 import projectsRouter from './routes/projects.js';
 import workspacesRouter from './routes/workspaces.js';
 
@@ -44,6 +45,7 @@ export const createApp = () => {
     );
   });
   app.use('/api/auth', authRouter);
+  app.use('/api/workspaces', oncallRouter);
   app.use('/api/workspaces', automationRouter);
   app.use('/api/workspaces', incidentsRouter);
   app.use('/api/workspaces', collaborationRouter);
@@ -52,26 +54,22 @@ export const createApp = () => {
   const errorHandler: ErrorRequestHandler = (error, _request, response, next) => {
     void next;
     if (error instanceof CoordinationUnavailable) {
-      response
-        .status(503)
-        .json({
-          error: error.message,
-          code: error instanceof RevocationIncomplete ? error.code : 'COORDINATION_UNAVAILABLE',
-        });
+      response.status(503).json({
+        error: error.message,
+        code: error instanceof RevocationIncomplete ? error.code : 'COORDINATION_UNAVAILABLE',
+      });
       return;
     }
     const status = error?.status === 400 || error?.status === 413 ? error.status : 500;
     console.error(JSON.stringify({ service: 'api', event: 'request_failed', status }));
-    response
-      .status(status)
-      .json({
-        error:
-          status === 400
-            ? 'Invalid request body'
-            : status === 413
-              ? 'Request body too large'
-              : 'Internal server error',
-      });
+    response.status(status).json({
+      error:
+        status === 400
+          ? 'Invalid request body'
+          : status === 413
+            ? 'Request body too large'
+            : 'Internal server error',
+    });
   };
   app.use(errorHandler);
 
