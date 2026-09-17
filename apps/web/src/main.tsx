@@ -12,6 +12,8 @@ import { createWorkspace, getCurrentUser, listWorkspaces, login, logout, registe
 import { AutomationApp } from './components/AutomationApp';
 import { IncidentApp } from './components/IncidentApp';
 import { OncallApp } from './components/OncallApp';
+import { PublicStatusPage } from './components/PublicStatusPage';
+import { StatusAdminApp } from './components/StatusAdminApp';
 import { WorkspaceApp } from './components/WorkspaceApp';
 import './styles.css';
 
@@ -166,7 +168,7 @@ function App() {
     queryFn: listWorkspaces,
     enabled: Boolean(me.data),
   });
-  const [area, setArea] = useState<'projects' | 'incidents' | 'automation' | 'oncall'>('projects');
+  const [area, setArea] = useState<'projects' | 'incidents' | 'automation' | 'oncall' | 'status'>('projects');
   const [authMode, setAuthMode] = useState<AuthMode>('login');
   const [showOnboarding, setShowOnboarding] = useState(false);
   const logoutMutation = useMutation({
@@ -217,8 +219,9 @@ function App() {
         <button aria-pressed={area === 'oncall'} onClick={() => setArea('oncall')}>
           On-Call
         </button>
+        <button aria-pressed={area === 'status'} onClick={() => setArea('status')}>Status pages</button>
       </nav>
-      {area === 'oncall' ? (
+      {area === 'status' ? <StatusAdminApp workspaceId={activeWorkspace.id} role={activeWorkspace.role} /> : area === 'oncall' ? (
         <OncallApp
           workspaceId={activeWorkspace.id}
           workspaceName={activeWorkspace.name}
@@ -253,10 +256,11 @@ function App() {
   );
 }
 
+const statusMatch = window.location.pathname.match(/^\/status\/([a-z0-9-]+)\/?$/);
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <App />
+      {statusMatch ? <PublicStatusPage slug={statusMatch[1]!} /> : <App />}
     </QueryClientProvider>
   </StrictMode>,
 );

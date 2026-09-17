@@ -71,6 +71,7 @@ export const activityEntityTypeSchema = z.enum([
   'automation',
   'oncall',
   'alert',
+  'status',
 ]);
 
 const mongoIdSchema = z.string().regex(/^[a-f\d]{24}$/i, 'Invalid id');
@@ -302,3 +303,4 @@ export type SocketAcknowledgement =
 export * from './incidents.js';
 export * from './automation.js';
 export * from './oncall.js';
+export * from './status.js';
