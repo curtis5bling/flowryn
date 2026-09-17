@@ -35,10 +35,21 @@
 - [x] Automation management interface, private realtime hints and server-side metrics
 - [x] Replica-set automation regressions and mocked network security tests
 
+## Milestone 7: On-call scheduling, alert routing and escalation
+
+- [x] Workspace schedules, ordered layers, UTC rotations and IANA-local DST coverage
+- [x] Audited deterministic overrides, opt-in self-override permissions and retained history
+- [x] Versioned bounded escalation policies and allowlisted routing with fallback/dry-run
+- [x] Atomic fingerprint/operation deduplication, alert lifecycle and incident-service integration
+- [x] Shared durable worker, multi-process lease fencing, acknowledgement arbitration and delivery receipts
+- [x] Private in-app pages, approved signed webhooks and eligible dead-letter retries
+- [x] Accessible On-Call interface, explicit realtime audiences and server-side metrics
+- [x] Replica-set concurrency/race, DST, authorization, delivery and frontend regression coverage
+
 ## Later
 
 - [ ] Intelligent prioritization and suggested next actions
 - [ ] Integrations for calendar, email, chat, and project tools
 - [ ] Audit logs, usage analytics, and production observability
 
-External monitoring ingestion, on-call scheduling, public status pages and AI incident automation are deferred beyond Milestone 5.
+Public status pages, vendor-specific paging providers and AI incident automation remain deferred.

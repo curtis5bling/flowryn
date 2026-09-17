@@ -64,7 +64,14 @@ export type WorkspaceRole = z.infer<typeof workspaceRoleSchema>;
 export const projectStatusSchema = z.enum(['active', 'archived']);
 export const taskStatusSchema = z.enum(['backlog', 'todo', 'in_progress', 'review', 'done']);
 export const taskPrioritySchema = z.enum(['low', 'medium', 'high', 'urgent']);
-export const activityEntityTypeSchema = z.enum(['project', 'task', 'incident', 'automation']);
+export const activityEntityTypeSchema = z.enum([
+  'project',
+  'task',
+  'incident',
+  'automation',
+  'oncall',
+  'alert',
+]);
 
 const mongoIdSchema = z.string().regex(/^[a-f\d]{24}$/i, 'Invalid id');
 const optionalDateSchema = z.string().datetime().optional().nullable();
@@ -180,6 +187,7 @@ export const notificationTypeSchema = z.enum([
   'project_archived',
   'incident_response',
   'automation',
+  'oncall_page',
 ]);
 export const notificationSchema = z.object({
   id: z.string(),
@@ -232,6 +240,18 @@ export const realtimeEventNameSchema = z.enum([
   'automation.runFailed',
   'integration.healthChanged',
   'integration.deliveryFailed',
+  'oncall.scheduleUpdated',
+  'oncall.overrideCreated',
+  'oncall.overrideCancelled',
+  'alert.opened',
+  'alert.occurrenceAdded',
+  'alert.acknowledged',
+  'alert.resolved',
+  'alert.reopened',
+  'alert.suppressed',
+  'escalation.advanced',
+  'escalation.deliveryFailed',
+  'alert.incidentLinked',
 ]);
 export const realtimeEventSchema = z.object({
   eventId: z.string(),
@@ -281,3 +301,4 @@ export type SocketAcknowledgement =
 
 export * from './incidents.js';
 export * from './automation.js';
+export * from './oncall.js';

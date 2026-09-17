@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { incidentIdSchema, incidentSeveritySchema, incidentStatusSchema } from './incidents.js';
+import { safeLabelsSchema } from './oncall.js';
 
 export const automationLimits = {
   depth: 4,
@@ -23,6 +24,9 @@ export const automationTriggerSchema = z.enum([
   'task.assigned',
   'task.statusChanged',
   'automation.manual',
+  'alert.opened',
+  'alert.occurrenceAdded',
+  'escalation.advanced',
 ]);
 export const automationFieldSchema = z.enum([
   'incident.severity',
@@ -92,6 +96,16 @@ export const automationConditionSchema = conditionAt(1).refine(
 const text = (n: number) => z.string().trim().min(1).max(n);
 const base = { id: z.string().uuid() };
 export const automationActionSchema = z.discriminatedUnion('type', [
+  z
+    .object({
+      ...base,
+      type: z.literal('alert.create'),
+      fingerprint: z.string().regex(/^[a-zA-Z0-9_.:/-]{1,160}$/),
+      title: text(200),
+      severity: incidentSeveritySchema,
+      escalationPolicyId: incidentIdSchema.optional(),
+    })
+    .strict(),
   z.object({ ...base, type: z.literal('incident.timeline'), message: text(4000) }).strict(),
   z
     .object({
@@ -164,6 +178,7 @@ export type AutomationAction = z.infer<typeof automationActionSchema>;
 export const automationPayloadSchema = z
   .object({
     actorId: incidentIdSchema,
+    alertId: incidentIdSchema.optional(),
     incidentId: incidentIdSchema.optional(),
     taskId: incidentIdSchema.optional(),
     projectId: incidentIdSchema.optional(),
@@ -207,11 +222,11 @@ export const integrationInputSchema = z
     status: z.enum(['active', 'disabled']),
     endpoint: z.string().url().max(2048).optional(),
     inboundEvents: z.array(z.literal('alert.received')).max(1),
-    outboundEvents: z.array(automationTriggerSchema).max(12),
+    outboundEvents: z.array(automationTriggerSchema).max(15),
   })
   .strict();
 export type IntegrationInput = z.infer<typeof integrationInputSchema>;
-export const inboundAlertSchema = z
+const legacyInboundAlertSchema = z
   .object({
     schemaVersion: z.literal(1),
     eventType: z.literal('alert.received'),
@@ -220,6 +235,27 @@ export const inboundAlertSchema = z
     status: incidentStatusSchema.optional(),
   })
   .strict();
+export const inboundAlertSchema = z.union([
+  legacyInboundAlertSchema,
+  z
+    .object({
+      schemaVersion: z.literal(2),
+      eventType: z.literal('alert.received'),
+      fingerprint: z.string().regex(/^[a-zA-Z0-9_.:/-]{1,160}$/),
+      title: text(200),
+      summary: z.string().trim().max(4000).default(''),
+      severity: incidentSeveritySchema,
+      incidentId: incidentIdSchema.optional(),
+      externalEventId: text(160).optional(),
+      projectId: incidentIdSchema.optional(),
+      serviceId: z
+        .string()
+        .regex(/^[a-zA-Z0-9_.-]{1,100}$/)
+        .optional(),
+      labels: safeLabelsSchema.default({}),
+    })
+    .strict(),
+]);
 export type AutomationRule = AutomationRuleInput & {
   id: string;
   version: number;

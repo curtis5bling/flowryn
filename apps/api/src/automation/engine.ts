@@ -20,6 +20,8 @@ import {
 import { ActivityModel } from '../models/Activity.js';
 import { NotificationModel } from '../models/Notification.js';
 import { TaskModel } from '../models/Task.js';
+import { claimEscalation, processEscalation, resumeSuppressedAlert } from '../oncall/escalation.js';
+import { createAlert } from '../oncall/service.js';
 
 import { publishAutomationHint } from './hints.js';
 import {
@@ -121,7 +123,9 @@ export const processEvent = async (event: ClaimedEvent) => {
         enabled: true,
         archivedAt: null,
         triggerType: event.eventType,
-        ...(payload.integrationId ? { inboundIntegrationId: payload.integrationId } : {}),
+        ...(event.eventType === 'automation.manual' && payload.integrationId
+          ? { inboundIntegrationId: payload.integrationId }
+          : {}),
         ...(event.targetRuleId ? { _id: event.targetRuleId } : {}),
       })
         .limit(101)
@@ -230,6 +234,21 @@ const domainAction = async (run: ClaimedRun, action: AutomationAction, session: 
   const operationId = stableOperation(run.id, action.id);
   const automation = contextFor(run);
   const common = { workspaceId, actorId: automationActorId, session, automation };
+  if (action.type === 'alert.create') {
+    const result = await createAlert({
+      ...common,
+      fields: {
+        operationId,
+        fingerprint: action.fingerprint,
+        title: action.title,
+        severity: action.severity,
+        ...(action.escalationPolicyId ? { escalationPolicyId: action.escalationPolicyId } : {}),
+        ...(payload.incidentId ? { linkedIncidentId: payload.incidentId } : {}),
+      },
+    });
+    assertIncident(result, 503, 'Alert unavailable');
+    return result.alert.id;
+  }
   if (action.type.startsWith('incident.')) {
     if (action.type === 'incident.declare') {
       assertIncident(
@@ -502,6 +521,16 @@ const completedActionHints = async (run: ClaimedRun, action: AutomationAction, i
               ? 'incident.declared'
               : 'incident.updated',
     });
+  if (entityId && action.type === 'alert.create') {
+    const event = await OutboxEventModel.findOne({
+      workspaceId: run.workspaceId,
+      eventId: stableOperation(run.id, action.id),
+    }).select('eventType');
+    publishAutomationHint({
+      ...common,
+      type: event?.eventType === 'alert.occurrenceAdded' ? 'alert.occurrenceAdded' : 'alert.opened',
+    });
+  }
   const notifications = await NotificationModel.find({
     workspaceId: run.workspaceId,
     operationId: stableOperation(run.id, action.id),
@@ -661,6 +690,7 @@ export class AutomationWorker {
   private timer?: ReturnType<typeof setTimeout>;
   private loop?: Promise<void>;
   private wake?: () => void;
+  private workKind = 0;
   ready = false;
   constructor(
     readonly concurrency = 4,
@@ -679,12 +709,30 @@ export class AutomationWorker {
     if (this.stopping || this.ticking) return;
     this.ticking = true;
     try {
+      await resumeSuppressedAlert();
       let claimed = 0;
       while (!this.stopping && this.active.size < this.concurrency && claimed < this.concurrency) {
-        const run = await claimRun(this.id);
-        const event = run ? null : await claimEvent(this.id);
-        if (!run && !event) break;
-        const work = (run ? processRun(run) : processEvent(event!))
+        // Round-robin across the existing durable queues prevents starvation.
+        const claimers = [
+          async () => {
+            const run = await claimRun(this.id);
+            return run ? () => processRun(run) : null;
+          },
+          async () => {
+            const event = await claimEvent(this.id);
+            return event ? () => processEvent(event) : null;
+          },
+          async () => {
+            const escalation = await claimEscalation(this.id);
+            return escalation ? () => processEscalation(escalation) : null;
+          },
+        ];
+        let execute: (() => Promise<void>) | null = null;
+        for (let index = 0; index < claimers.length && !execute; index++)
+          execute = await claimers[(this.workKind + index) % claimers.length]!();
+        this.workKind = (this.workKind + 1) % claimers.length;
+        if (!execute) break;
+        const work = execute()
           .catch(() => {
             console.error(
               JSON.stringify({ service: 'automation', event: 'processing_interrupted' }),

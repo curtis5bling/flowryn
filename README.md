@@ -59,7 +59,7 @@ MongoDB **replica-set or sharded-cluster transactions are required**. Docker Com
 
 Incident state, append-only timeline, activity and recipient notifications commit atomically. Retry a failed declaration/action with the **same operation ID and body**; the UI provides a retry button that retains both. A 503 or lost response may follow an already committed transaction, so check/retry the original operation before starting a different declaration. Live events contain identifiers and empty payloads, never incident narrative or runbook instructions. REST is authoritative and is polled while live delivery is unavailable. Redis outages preserve durable incident writes, while sockets fail closed and recover their subscriptions when coordination returns.
 
-The API tests use an isolated `MongoMemoryReplSet`; normal tests require no external MongoDB or Redis service. The first test run may download a MongoDB binary. See [Incident API and state machine](docs/INCIDENTS.md) for routes, permissions, retry semantics and metric definitions. External monitoring, on-call scheduling, public status pages and AI response automation remain out of scope.
+The API tests use an isolated `MongoMemoryReplSet`; normal tests require no external MongoDB or Redis service. The first test run may download a MongoDB binary. See [Incident API and state machine](docs/INCIDENTS.md) for routes, permissions, retry semantics and metric definitions. Public status pages and AI response automation remain out of scope.
 
 ## Workflow automation (Milestone 6)
 
@@ -68,6 +68,12 @@ Choose **Automation** to manage structured workspace rules, execution history, d
 Configure a private `AUTOMATION_ENCRYPTION_KEYS` JSON key map before starting API or worker; no fallback key exists. Start a separate durable worker with `npm run worker:dev -w @flowryn/api` (production: `npm run worker:start -w @flowryn/api`). MongoDB transactions commit domain changes and outbox events together; leases and transactional action receipts support crash recovery. Redis provides optional realtime hints; MongoDB is the durable source of truth.
 
 See [Automation API, delivery semantics and deployment](docs/AUTOMATION.md) for rule contracts, signing, encryption-key rotation, SSRF policy, retry/dead-letter procedures, and worker health/shutdown. External HTTP delivery is at least once and requires receiver deduplication by delivery ID.
+
+## On-call scheduling and escalation (Milestone 7)
+
+Choose **On-Call** for workspace schedules, UTC rotations with IANA-local coverage, overrides, escalation policies, structured alert routing, and the alert dashboard. The existing automation worker also claims due escalations and suppression expiry. Alert creation and deduplication start a single escalation chain transactionally; acknowledgements cancel future dispatch under the same alert write fence. Delivery uses private in-app pages and approved generic webhooks with stable receiver idempotency keys.
+
+No additional environment variables or paging providers are needed. Continue deploying the Milestone 6 worker, MongoDB replica sets (7+, Compose uses 8), Redis and encryption keys. See [On-call API, DST semantics, permissions and recovery](docs/ONCALL.md) before configuring coverage or handling dead letters. No SMS, calling, email provider, vendor-specific paging, AI decisions or remediation is claimed.
 
 ## Commands
 
@@ -78,3 +84,4 @@ See [Automation API, delivery semantics and deployment](docs/AUTOMATION.md) for 
 - [Architecture](docs/ARCHITECTURE.md)
 - [Roadmap](docs/ROADMAP.md)
 - [Incident API and state machine](docs/INCIDENTS.md)
+- [On-call schedules, alerts and escalation](docs/ONCALL.md)

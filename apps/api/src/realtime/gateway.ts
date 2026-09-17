@@ -47,7 +47,11 @@ export const relayAutomationHint = async (hint: AutomationHint) => {
     io.local.to(`workspace:${hint.workspaceId}:user:${hint.recipientId}`).emit(hint.type, hint);
     return;
   }
-  if (!hint.type.startsWith('automation.') && !hint.type.startsWith('integration.')) {
+  if (
+    !hint.type.startsWith('automation.') &&
+    !hint.type.startsWith('integration.') &&
+    hint.type !== 'escalation.deliveryFailed'
+  ) {
     const audience = audiences[hint.type];
     if (
       audience === 'private' ||
@@ -112,6 +116,18 @@ const audiences: Record<
   'automation.runFailed': 'private',
   'integration.healthChanged': 'private',
   'integration.deliveryFailed': 'private',
+  'oncall.scheduleUpdated': 'workspace',
+  'oncall.overrideCreated': 'workspace',
+  'oncall.overrideCancelled': 'workspace',
+  'alert.opened': 'workspace',
+  'alert.occurrenceAdded': 'workspace',
+  'alert.acknowledged': 'workspace',
+  'alert.resolved': 'workspace',
+  'alert.reopened': 'workspace',
+  'alert.suppressed': 'workspace',
+  'escalation.advanced': 'workspace',
+  'escalation.deliveryFailed': 'private',
+  'alert.incidentLinked': 'workspace',
   'comment.created': 'project',
   'comment.updated': 'project',
   'comment.deleted': 'project',

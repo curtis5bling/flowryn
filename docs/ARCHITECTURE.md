@@ -1,5 +1,7 @@
 # Architecture
 
+Milestone 7 extends the same worker with fair escalation claims and suppression expiry. Workspace schedules interpret coverage with IANA timezone data while rotation durations remain UTC. Alert fingerprints and operation receipts atomically deduplicate alert creation and escalation startup. Immutable policy snapshots, dispatch-time recipients, stable per-delivery keys and alert/execution write fences arbitrate acknowledgement races. In-app pages commit with their receipts; bounded approved webhooks retain at-least-once receiver semantics. See [On-call architecture and operational guarantees](ONCALL.md).
+
 Milestone 6 adds an independently deployed MongoDB automation worker. Domain services append transactional outbox events, event workers snapshot evaluated rules into unique runs, and action workers commit database effects and completion receipts together under lease fencing. Generic webhook records store authenticated-encrypted credentials and sanitized delivery histories. Redis carries optional typed empty-payload invalidation hints; run/integration hints are restricted to administrator private rooms. See [Automation architecture, contracts and operational semantics](AUTOMATION.md).
 
 Flowryn uses npm workspaces to keep independently deployable applications and reusable contracts in one repository.

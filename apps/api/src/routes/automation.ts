@@ -43,6 +43,7 @@ import { ProjectModel } from '../models/Project.js';
 import { RunbookModel } from '../models/Runbook.js';
 import { TaskModel } from '../models/Task.js';
 import { WorkspaceModel } from '../models/Workspace.js';
+import { PolicyModel } from '../oncall/models.js';
 
 const router = Router();
 const base = '/:workspaceId/automation';
@@ -196,6 +197,7 @@ const validateReferences = async (
     );
   }
   for (const action of rule.actions) {
+    if (action.type === 'alert.create' && action.escalationPolicyId) assertIncident(await PolicyModel.exists({ workspaceId, _id: action.escalationPolicyId, enabled: true, archivedAt: null }).session(session ?? null), 400, 'Active workspace policy required');
     if (action.type === 'incident.declare')
       assertIncident(
         rule.triggerType === 'automation.manual',
