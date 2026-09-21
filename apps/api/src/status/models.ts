@@ -229,6 +229,7 @@ const deliverySchema = new Schema(
   { timestamps: true },
 );
 deliverySchema.index({ workspaceId: 1, statusPageId: 1, status: 1 });
+deliverySchema.index({ status: 1, availableAt: 1, attemptCount: 1, _id: 1 });
 export const StatusDeliveryModel = model('StatusDelivery', deliverySchema);
 
 export const statusModels = [

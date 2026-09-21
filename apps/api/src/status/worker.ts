@@ -82,7 +82,24 @@ export const processStatusWork = async (
       })
         .sort({ scheduledStartAt: 1 })
         .session(session);
-      if (maintenance?.status === 'scheduled') {
+      if (
+        maintenance?.status === 'scheduled' &&
+        maintenance.scheduledEndAt &&
+        maintenance.scheduledEndAt <= now
+      ) {
+        maintenance.status = 'cancelled';
+        maintenance.cancelledAt = now;
+        await maintenance.save({ session });
+        await StatusComponentModel.updateMany(
+          {
+            workspaceId: maintenance.workspaceId,
+            statusPageId: maintenance.statusPageId,
+            _id: { $in: maintenance.affectedComponentIds },
+          },
+          { $pull: { maintenanceReservations: { maintenanceId: maintenance._id } } },
+          { session },
+        );
+      } else if (maintenance?.status === 'scheduled') {
         const components = await StatusComponentModel.find({
           workspaceId: maintenance.workspaceId,
           statusPageId: maintenance.statusPageId,
@@ -237,7 +254,13 @@ export const processStatusWork = async (
     event.leaseExpiresAt = undefined;
     await event.save();
   }
-  if (!adapter) return;
+  if (!adapter) {
+    await StatusDeliveryModel.updateMany(
+      { status: 'pending', availableAt: { $lte: now } },
+      { $set: { status: 'dead', errorCode: 'DELIVERY_ADAPTER_UNAVAILABLE' } },
+    );
+    return;
+  }
   await StatusDeliveryModel.updateMany(
     { status: 'failed', attemptCount: { $gte: 5 }, availableAt: { $lte: now } },
     { $set: { status: 'dead', errorCode: 'DELIVERY_FAILED' } },

@@ -5,10 +5,11 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { createApp } from './app.js';
 import { issueTokens } from './auth/tokens.js';
+import { ActivityModel } from './models/Activity.js';
 import { UserModel } from './models/User.js';
 import { WorkspaceModel } from './models/Workspace.js';
 import { WorkspaceMemberModel } from './models/WorkspaceMember.js';
-import { StatusComponentModel, StatusPageModel, StatusSubscriberModel } from './status/models.js';
+import { StatusComponentModel, StatusDeliveryModel, StatusPageModel, StatusSubscriberModel } from './status/models.js';
 import { enqueueStatusEvent } from './status/service.js';
 import { processStatusWork, type StatusDeliveryAdapter } from './status/worker.js';
 
@@ -98,9 +99,33 @@ describe('status page integration', () => {
     const component = await StatusComponentModel.create({ workspaceId: f.workspace.id, statusPageId: page._id, stableId: crypto.randomUUID(), name: 'API', description: '', slug: 'public-api', order: 1, status: 'operational', statusRevision: 0, enabled: true, hidden: false, createdBy: f.owner.id, updatedBy: f.owner.id, archivedAt: null });
     const start = new Date('2026-01-01T00:00:00.000Z');
     await request(app).post(`/api/workspaces/${f.workspace.id}/status-pages/${page.id}/maintenance`).set('Cookie', await f.cookie(f.owner)).send({ title: 'Deploy', description: 'Upgrade', affectedComponentIds: [component.id], scheduledStartAt: start.toISOString(), scheduledEndAt: new Date(start.getTime() + 60000).toISOString(), reminderMinutes: [] }).expect(201);
+    expect(await ActivityModel.countDocuments({ workspaceId: f.workspace.id, action: 'maintenance.scheduled' })).toBe(1);
     await processStatusWork(start, 'test-worker');
     await StatusComponentModel.updateOne({ _id: component._id }, { $set: { status: 'degradedPerformance' }, $inc: { statusRevision: 1 } });
     await processStatusWork(new Date(start.getTime() + 60001), 'test-worker');
     expect((await StatusComponentModel.findById(component._id))!.status).toBe('degradedPerformance');
+  });
+
+  it('keeps an unavailable manually retried delivery visible as dead', async () => {
+    const f = await fixture();
+    const page = await StatusPageModel.create({ ...pageInput, workspaceId: f.workspace.id, createdBy: f.owner.id, updatedBy: f.owner.id, publishedAt: new Date(), archivedAt: null });
+    const delivery = await StatusDeliveryModel.create({
+      workspaceId: f.workspace.id,
+      statusPageId: page._id,
+      subscriberId: new mongoose.Types.ObjectId(),
+      eventId: crypto.randomUUID(),
+      idempotencyKey: crypto.randomUUID(),
+      status: 'dead',
+      attemptCount: 5,
+      availableAt: new Date(),
+      errorCode: 'DELIVERY_FAILED',
+    });
+    await request(app)
+      .post(`/api/workspaces/${f.workspace.id}/status-pages/${page.id}/deliveries/${delivery.id}/retry`)
+      .set('Cookie', await f.cookie(f.owner))
+      .expect(200);
+    await processStatusWork(new Date(Date.now() + 1), 'test-worker');
+    const retried = await StatusDeliveryModel.findById(delivery._id);
+    expect(retried).toMatchObject({ status: 'dead', errorCode: 'DELIVERY_ADAPTER_UNAVAILABLE' });
   });
 });

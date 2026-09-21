@@ -123,7 +123,7 @@ export function PublicStatusPage({ slug }: { slug: string }) {
         <h2>Recent incidents</h2>
         {data.incidents.filter((incident) => incident.status === 'resolved').length ? data.incidents
           .filter((incident) => incident.status === 'resolved')
-          .map((incident) => <article key={incident.id}><h3>{incident.title}</h3><p>{incident.summary}</p>{incident.updates.map((update) => <div key={update.id}><strong>{update.status}</strong> — {update.message} <time dateTime={update.publishedAt}>{new Date(update.publishedAt).toLocaleString()}</time></div>)}<p>Resolved <time dateTime={incident.resolvedAt ?? incident.publishedAt}>{new Date(incident.resolvedAt ?? incident.publishedAt).toLocaleString()}</time></p></article>) : <p>No recent incidents.</p>}
+          .map((incident) => <article key={incident.id}><h3>{incident.title}</h3><p>{incident.summary}</p><p>{incident.impact}</p>{incident.updates.map((update) => <div key={update.id}><strong>{update.status}</strong> — {update.message} <time dateTime={update.publishedAt}>{new Date(update.publishedAt).toLocaleString()}</time></div>)}<p>Resolved <time dateTime={incident.resolvedAt ?? incident.publishedAt}>{new Date(incident.resolvedAt ?? incident.publishedAt).toLocaleString()}</time></p></article>) : <p>No recent incidents.</p>}
       </section>
       <section>
         <h2>Active incidents</h2>
@@ -132,7 +132,7 @@ export function PublicStatusPage({ slug }: { slug: string }) {
           .map((incident) => (
             <article key={incident.id}>
               <h3>{incident.title}</h3>
-              <p>{incident.summary}</p>
+              <p>{incident.summary}</p><p>{incident.impact}</p>
               {incident.updates.map((update) => (
                 <div key={update.id}>
                   <strong>{update.status}</strong> — {update.message}{' '}

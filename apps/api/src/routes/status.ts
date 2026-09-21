@@ -266,6 +266,7 @@ router.post(`${base}/:pageId/components`, async (request, response) => {
     revision: 0,
     createdBy: actor(request),
   });
+  await recordStatusActivity(request.params.workspaceId, actor(request), component.id, 'statusComponent.created');
   response.status(201).json({ component });
 });
 router.patch(`${base}/:pageId/components/:componentId`, async (request, response) => {
@@ -279,6 +280,7 @@ router.patch(`${base}/:pageId/components/:componentId`, async (request, response
     { new: true, runValidators: true },
   ).exec(), 'Component slug or order already exists');
   assertIncident(component, 404, 'Component not found');
+  await recordStatusActivity(request.params.workspaceId, actor(request), component.id, 'statusComponent.updated');
   response.json({ component });
 });
 router.delete(`${base}/:pageId/components/:componentId`, async (request, response) => {
@@ -293,6 +295,7 @@ router.delete(`${base}/:pageId/components/:componentId`, async (request, respons
     { $set: { archivedAt: new Date(), enabled: false, hidden: true, updatedBy: actor(request) } },
   );
   assertIncident(component, 404, 'Component not found');
+  await recordStatusActivity(request.params.workspaceId, actor(request), component.id, 'statusComponent.archived');
   response.status(204).end();
 });
 router.put(`${base}/:pageId/components/order`, async (request, response) => {
@@ -344,6 +347,13 @@ router.patch(`${base}/:pageId/components/:componentId/status`, async (request, r
           request.params.pageId,
           'component.statusChanged',
           publicComponent(component),
+          session,
+        );
+        await recordStatusActivity(
+          request.params.workspaceId,
+          actor(request),
+          component.id,
+          'statusComponent.statusChanged',
           session,
         );
       }
@@ -489,7 +499,7 @@ router.post(`${base}/:pageId/incidents/:publicIncidentId/updates`, async (reques
       assertIncident(incident, 404, 'Public incident not found');
       incident.status = input.status;
       incident.updatedBy = new mongoose.Types.ObjectId(actor(request));
-      incident.resolvedAt = input.status === 'resolved' ? new Date() : null;
+      incident.resolvedAt = input.status === 'resolved' ? (incident.resolvedAt ?? new Date()) : null;
       await incident.save({ session });
       [update] = await PublicIncidentUpdateModel.create(
         [
@@ -527,13 +537,41 @@ router.post(`${base}/:pageId/incidents/:publicIncidentId/updates`, async (reques
 router.post(`${base}/:pageId/incidents/:publicIncidentId/corrections`, async (request, response) => {
   await verifyPage(request);
   const input = parse(publicCorrectionInputSchema, request.body);
-  const incident = await PublicIncidentModel.findOne({ ...scope(request), _id: request.params.publicIncidentId, publishedAt: { $type: 'date' }, archivedAt: null });
-  assertIncident(incident, 404, 'Public incident not found');
-  assertIncident(input.status === incident.status, 400, 'Corrections cannot change incident state');
-  assertIncident(await PublicIncidentUpdateModel.exists({ ...scope(request), _id: input.correctionOf, publicIncidentId: incident._id }), 400, 'Correction target not found');
-  const update = await PublicIncidentUpdateModel.create({ ...scope(request), publicIncidentId: incident._id, ...input, publishedAt: new Date(), createdBy: actor(request) });
-  await recordStatusActivity(request.params.workspaceId, actor(request), incident.id, 'publicIncident.corrected');
-  await enqueueStatusEvent(request.params.workspaceId, request.params.pageId, 'publicIncident.updated', { incidentId: incident.id, updateId: update.id });
+  const session = await mongoose.startSession();
+  let incident;
+  let update;
+  try {
+    await session.withTransaction(async () => {
+      incident = await PublicIncidentModel.findOne({
+        ...scope(request),
+        _id: request.params.publicIncidentId,
+        publishedAt: { $type: 'date' },
+        archivedAt: null,
+      }).session(session);
+      assertIncident(incident, 404, 'Public incident not found');
+      assertIncident(input.status === incident.status, 400, 'Corrections cannot change incident state');
+      assertIncident(
+        await PublicIncidentUpdateModel.exists({
+          ...scope(request),
+          _id: input.correctionOf,
+          publicIncidentId: incident._id,
+        }).session(session),
+        400,
+        'Correction target not found',
+      );
+      [update] = await PublicIncidentUpdateModel.create(
+        [{ ...scope(request), publicIncidentId: incident._id, ...input, publishedAt: new Date(), createdBy: actor(request) }],
+        { session },
+      );
+      incident.updatedBy = new mongoose.Types.ObjectId(actor(request));
+      await incident.save({ session, timestamps: true });
+      await recordStatusActivity(request.params.workspaceId, actor(request), incident.id, 'publicIncident.corrected', session);
+      await enqueueStatusEvent(request.params.workspaceId, request.params.pageId, 'publicIncident.updated', { incidentId: incident.id, updateId: update!.id }, session);
+    });
+  } finally {
+    await session.endSession();
+  }
+  assertIncident(update, 500, 'Public incident correction failed');
   response.status(201).json({ update });
 });
 router.delete(`${base}/:pageId/incidents/:publicIncidentId`, async (request, response) => {
@@ -627,6 +665,13 @@ router.post(`${base}/:pageId/maintenance`, async (request, response) => {
         { maintenanceId: maintenance.id },
         session,
       );
+      await recordStatusActivity(
+        request.params.workspaceId,
+        actor(request),
+        maintenance.id,
+        'maintenance.scheduled',
+        session,
+      );
     });
   } finally {
     await session.endSession();
@@ -648,6 +693,7 @@ router.patch(`${base}/:pageId/maintenance/:maintenanceId`, async (request, respo
       : null;
   await maintenance.save();
   await enqueueStatusEvent(request.params.workspaceId, request.params.pageId, 'maintenance.updated', { maintenanceId: maintenance.id });
+  await recordStatusActivity(request.params.workspaceId, actor(request), maintenance.id, 'maintenance.updated');
   response.json({ maintenance });
 });
 router.post(`${base}/:pageId/maintenance/:maintenanceId/start`, async (request, response) => {
@@ -673,6 +719,7 @@ router.post(`${base}/:pageId/maintenance/:maintenanceId/start`, async (request, 
       maintenance.nextReminderAt = null;
       maintenance.updatedBy = new mongoose.Types.ObjectId(actor(request));
       await maintenance.save({ session });
+      await recordStatusActivity(request.params.workspaceId, actor(request), maintenance.id, 'maintenance.started', session);
     });
   } finally { await session.endSession(); }
   response.status(202).json({ maintenance });
@@ -685,6 +732,7 @@ router.post(`${base}/:pageId/maintenance/:maintenanceId/complete`, async (reques
     { new: true },
   );
   assertIncident(maintenance, 404, 'In-progress maintenance not found');
+  await recordStatusActivity(request.params.workspaceId, actor(request), maintenance.id, 'maintenance.completed');
   response.status(202).json({ maintenance });
 });
 router.post(`${base}/:pageId/maintenance/:maintenanceId/cancel`, async (request, response) => {
@@ -716,6 +764,7 @@ router.post(`${base}/:pageId/maintenance/:maintenanceId/cancel`, async (request,
       await maintenance.save({ session });
       await StatusComponentModel.updateMany({ ...scope(request), _id: { $in: maintenance.affectedComponentIds } }, { $pull: { maintenanceReservations: { maintenanceId: maintenance._id } } }, { session });
       await enqueueStatusEvent(request.params.workspaceId, request.params.pageId, 'maintenance.cancelled', { maintenanceId: maintenance.id }, session);
+      await recordStatusActivity(request.params.workspaceId, actor(request), maintenance.id, 'maintenance.cancelled', session);
     });
   } finally { await session.endSession(); }
   response.json({ maintenance });
@@ -749,7 +798,7 @@ router.post(`${base}/:pageId/deliveries/:deliveryId/retry`, async (request, resp
 router.get(`${base}/:pageId/metrics`, async (request, response) => {
   await verifyPage(request);
   const since = new Date(Date.now() - 365 * 86400_000);
-  const [components, componentRecords, subscribers, deliveries, incidents, maintenance] = await Promise.all([
+  const [components, componentRecords, subscribers, deliveries, incidentMetrics, maintenanceMetrics] = await Promise.all([
     StatusComponentModel.aggregate([
       {
         $match: {
@@ -776,17 +825,43 @@ router.get(`${base}/:pageId/metrics`, async (request, response) => {
       },
       { $group: { _id: '$status', count: { $sum: 1 } } },
     ]),
-    PublicIncidentModel.find({ ...scope(request), publishedAt: { $gte: since }, archivedAt: null })
-      .select('publishedAt resolvedAt internalIncidentId').limit(1000),
-    MaintenanceModel.find({
-      ...scope(request),
-      status: 'completed',
-      startedAt: { $gte: since, $ne: null },
-      completedAt: { $ne: null },
-    }).select('startedAt completedAt').limit(1000),
+    PublicIncidentModel.aggregate([
+      { $match: {
+        workspaceId: new mongoose.Types.ObjectId(request.params.workspaceId),
+        statusPageId: new mongoose.Types.ObjectId(request.params.pageId),
+        publishedAt: { $gte: since },
+        archivedAt: null,
+      } },
+      { $facet: {
+        totals: [{ $group: { _id: null, count: { $sum: 1 } } }],
+        durations: [
+          { $match: { resolvedAt: { $ne: null } } },
+          { $group: { _id: null, mean: { $avg: { $subtract: ['$resolvedAt', '$publishedAt'] } } } },
+        ],
+        months: [
+          { $group: { _id: { $dateToString: { format: '%Y-%m', date: '$publishedAt', timezone: 'UTC' } }, count: { $sum: 1 } } },
+          { $sort: { _id: 1 } },
+        ],
+        publication: [
+          { $match: { internalIncidentId: { $ne: null } } },
+          { $lookup: { from: IncidentModel.collection.name, localField: 'internalIncidentId', foreignField: '_id', as: 'internal' } },
+          { $unwind: '$internal' },
+          { $match: { $expr: { $eq: ['$internal.workspaceId', '$workspaceId'] } } },
+          { $group: { _id: null, mean: { $avg: { $subtract: ['$publishedAt', '$internal.createdAt'] } } } },
+        ],
+      } },
+    ]),
+    MaintenanceModel.aggregate([
+      { $match: {
+        workspaceId: new mongoose.Types.ObjectId(request.params.workspaceId),
+        statusPageId: new mongoose.Types.ObjectId(request.params.pageId),
+        status: 'completed',
+        startedAt: { $gte: since, $ne: null },
+        completedAt: { $ne: null },
+      } },
+      { $group: { _id: null, mean: { $avg: { $subtract: ['$completedAt', '$startedAt'] } } } },
+    ]),
   ]);
-  const incidentDurations = incidents.filter((x) => x.resolvedAt).map((x) => x.resolvedAt!.getTime() - x.publishedAt!.getTime());
-  const maintenanceDurations = maintenance.map((x) => x.completedAt!.getTime() - x.startedAt!.getTime());
   const deliveryCounts = Object.fromEntries(deliveries.map((x) => [x._id, x.count]));
   const totalDeliveries = Object.values(deliveryCounts).reduce((sum: number, count) => sum + Number(count), 0);
   const now = Date.now();
@@ -822,26 +897,18 @@ router.get(`${base}/:pageId/metrics`, async (request, response) => {
     if (state === 'operational') operationalMs += Math.max(0, componentEnd - interval.cursor);
     recordedMs += Math.max(0, componentEnd - interval.cursor);
   }
-  const internalIds = incidents.map((x) => x.internalIncidentId).filter(Boolean);
-  const internalIncidents = await IncidentModel.find({ workspaceId: request.params.workspaceId, _id: { $in: internalIds } }).select('createdAt').limit(1000);
-  const declaredAt = new Map(internalIncidents.map((x) => [x.id, x.createdAt!.getTime()]));
-  const publicationLags = incidents.filter((x) => x.internalIncidentId && declaredAt.has(String(x.internalIncidentId))).map((x) => x.publishedAt!.getTime() - declaredAt.get(String(x.internalIncidentId))!);
-  const incidentsByMonth = new Map<string, number>();
-  for (const incident of incidents) {
-    const month = incident.publishedAt!.toISOString().slice(0, 7);
-    incidentsByMonth.set(month, (incidentsByMonth.get(month) ?? 0) + 1);
-  }
+  const incidentSummary = incidentMetrics[0] ?? { totals: [], durations: [], months: [], publication: [] };
   response.json({
     components: Object.fromEntries(components.map((x) => [x._id, x.count])),
     subscribers,
     deliveries: deliveryCounts,
     deliverySuccessRate: totalDeliveries ? (deliveryCounts.succeeded ?? 0) / totalDeliveries : null,
-    publicIncidentsLast365Days: incidents.length,
-    publicIncidentsByMonth: [...incidentsByMonth].map(([month, count]) => ({ month, count })),
-    meanIncidentDurationMs: incidentDurations.length ? incidentDurations.reduce((a, b) => a + b, 0) / incidentDurations.length : null,
-    meanMaintenanceDurationMs: maintenanceDurations.length ? maintenanceDurations.reduce((a, b) => a + b, 0) / maintenanceDurations.length : null,
+    publicIncidentsLast365Days: incidentSummary.totals[0]?.count ?? 0,
+    publicIncidentsByMonth: incidentSummary.months.map((item: { _id: string; count: number }) => ({ month: item._id, count: item.count })),
+    meanIncidentDurationMs: incidentSummary.durations[0]?.mean ?? null,
+    meanMaintenanceDurationMs: maintenanceMetrics[0]?.mean ?? null,
     recordedAvailability: recordedMs ? operationalMs / recordedMs : null,
-    meanInternalToPublicPublicationMs: publicationLags.length ? publicationLags.reduce((a, b) => a + b, 0) / publicationLags.length : null,
+    meanInternalToPublicPublicationMs: incidentSummary.publication[0]?.mean ?? null,
     recordedStatusTransitions,
     availabilityNotice:
       'Availability reflects Flowryn recorded public status history, not independent external monitoring.',

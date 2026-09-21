@@ -19,6 +19,9 @@ import workspacesRouter from './routes/workspaces.js';
 
 export const createApp = () => {
   const app = express();
+  const trustedProxyHops = Number.parseInt(process.env.TRUST_PROXY_HOPS ?? '0', 10);
+  if (Number.isSafeInteger(trustedProxyHops) && trustedProxyHops > 0)
+    app.set('trust proxy', trustedProxyHops);
 
   const allowedOrigins = (process.env.SOCKET_ALLOWED_ORIGINS ?? 'http://localhost:5173')
     .split(',')
@@ -69,10 +72,10 @@ export const createApp = () => {
     console.error(JSON.stringify({ service: 'api', event: 'request_failed', status }));
     response.status(status).json({
       error:
-        status < 500
-          ? error instanceof IncidentError ? error.message : 'Invalid request body'
-          : status === 413
-            ? 'Request body too large'
+        status === 413
+          ? 'Request body too large'
+          : status < 500
+            ? error instanceof IncidentError ? error.message : 'Invalid request body'
             : 'Internal server error',
     });
   };

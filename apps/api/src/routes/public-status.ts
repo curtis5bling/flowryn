@@ -280,6 +280,8 @@ router.get('/:slug/events', limited(10, 'events'), async (request, response) => 
       }
       const events = await StatusEventModel.find({
         statusPageId: page._id,
+        targetSubscriberId: null,
+        type: { $regex: /^(component\.|publicIncident\.|maintenance\.)/ },
         $or: [
           { createdAt: { $gt: cursor } },
           ...(cursorId ? [{ createdAt: cursor, _id: { $gt: cursorId } }] : []),
@@ -355,9 +357,18 @@ router.post('/:slug/subscribe', limited(5, 'subscribe'), async (request, respons
     const unsubscribe = token();
     const encryptedVerification = encryptSecret(verification, String(page.workspaceId), String(subscriberId));
     const encryptedUnsubscribe = encryptSecret(unsubscribe, String(page.workspaceId), String(subscriberId));
-    const subscriber = await StatusSubscriberModel.findOneAndUpdate(
-      { statusPageId: page._id, channel: input.data.channel, addressHash: hash },
-      {
+    let subscriber;
+    try {
+      subscriber = await StatusSubscriberModel.findOneAndUpdate(
+        {
+          statusPageId: page._id,
+          channel: input.data.channel,
+          addressHash: hash,
+          ...(current
+            ? { _id: current._id, verifiedAt: current.verifiedAt ?? null, unsubscribedAt: current.unsubscribedAt ?? null }
+            : {}),
+        },
+        {
         $set: {
           workspaceId: page.workspaceId,
           ...input.data,
@@ -377,10 +388,14 @@ router.post('/:slug/subscribe', limited(5, 'subscribe'), async (request, respons
         $setOnInsert: {
           _id: subscriberId,
         },
-      },
-      { upsert: true, new: true },
-    );
-    await enqueueStatusEvent(String(page.workspaceId), page.id, 'subscription.verify', {}, undefined, subscriber.id);
+        },
+        { upsert: !current, new: true },
+      );
+    } catch (error) {
+      if ((error as { code?: number }).code !== 11000) throw error;
+    }
+    if (subscriber)
+      await enqueueStatusEvent(String(page.workspaceId), page.id, 'subscription.verify', {}, undefined, subscriber.id);
   }
   response.status(202).json({ message: 'If eligible, verification instructions will be sent.' });
 });

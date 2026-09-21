@@ -61,6 +61,11 @@ export const publishStatusPage = (workspaceId: string, pageId: string) =>
 export type ManagedComponent = { _id: string; name: string; description: string; status: StatusComponentState; hidden: boolean; order: number };
 export const getStatusComponents = (workspaceId: string, pageId: string) =>
   request<{ groups: Array<{ _id: string; name: string; order: number }>; components: ManagedComponent[] }>(`/api/workspaces/${workspaceId}/status-pages/${pageId}/components`);
+export const createStatusComponent = (workspaceId: string, pageId: string, name: string, slug: string, order: number) =>
+  request<{ component: ManagedComponent }>(`/api/workspaces/${workspaceId}/status-pages/${pageId}/components`, {
+    method: 'POST',
+    body: JSON.stringify({ name, slug, description: '', order, groupId: null, status: 'operational', enabled: true, hidden: false }),
+  });
 export const setComponentStatus = (workspaceId: string, pageId: string, componentId: string, status: StatusComponentState) =>
   request<{ component: ManagedComponent }>(`/api/workspaces/${workspaceId}/status-pages/${pageId}/components/${componentId}/status`, { method: 'PATCH', body: JSON.stringify({ status }) });
 export const getStatusMetrics = (workspaceId: string, pageId: string) =>
