@@ -22,6 +22,8 @@ import { NotificationModel } from '../models/Notification.js';
 import { TaskModel } from '../models/Task.js';
 import { claimEscalation, processEscalation, resumeSuppressedAlert } from '../oncall/escalation.js';
 import { createAlert } from '../oncall/service.js';
+import { configuredStatusDeliveryAdapter } from '../status/adapter.js';
+import { processStatusWork } from '../status/worker.js';
 
 import { publishAutomationHint } from './hints.js';
 import {
@@ -691,6 +693,7 @@ export class AutomationWorker {
   private loop?: Promise<void>;
   private wake?: () => void;
   private workKind = 0;
+  private statusRunning = false;
   ready = false;
   constructor(
     readonly concurrency = 4,
@@ -726,6 +729,14 @@ export class AutomationWorker {
             const escalation = await claimEscalation(this.id);
             return escalation ? () => processEscalation(escalation) : null;
           },
+          async () =>
+            this.statusRunning
+              ? null
+              : () => {
+                  this.statusRunning = true;
+                  return processStatusWork(new Date(), this.id, configuredStatusDeliveryAdapter())
+                    .finally(() => { this.statusRunning = false; });
+                },
         ];
         let execute: (() => Promise<void>) | null = null;
         for (let index = 0; index < claimers.length && !execute; index++)

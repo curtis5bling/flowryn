@@ -85,3 +85,6 @@ No additional environment variables or paging providers are needed. Continue dep
 - [Roadmap](docs/ROADMAP.md)
 - [Incident API and state machine](docs/INCIDENTS.md)
 - [On-call schedules, alerts and escalation](docs/ONCALL.md)
+# Public service health
+
+Flowryn includes workspace-managed public status pages, sanitized public incident updates, scheduled maintenance, and privacy-conscious subscriptions. See [Public status pages](docs/STATUS_PAGES.md) for the publication boundary, API/cache behavior, worker recovery, and availability methodology.

@@ -1166,3 +1166,16 @@ input:focus {
     display: block;
   }
 }
+.public-status { --status-accent: #d7674d; max-width: 860px; margin: 0 auto; padding: 3rem 1.25rem 6rem; color: #18221f; }
+.public-status header { border-bottom: 3px solid var(--status-accent); margin-bottom: 1.5rem; }
+.public-status section { margin: 1rem 0; padding: 1.25rem; border: 1px solid #dce4e0; border-radius: 14px; background: #fff; }
+.overall-status { border-left: 6px solid #2f8f68 !important; }
+.overall-status.status-majorOutage, .overall-status.status-partialOutage { border-left-color: #b64235 !important; }
+.overall-status.status-degradedPerformance, .overall-status.status-maintenance { border-left-color: #a56b0b !important; }
+.status-list { list-style: none; padding: 0; margin: 0; }
+.status-list li { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .85rem 0; border-bottom: 1px solid #e8eeeb; }
+.status-list small { display: block; color: #60706a; margin-top: .2rem; }
+.status-pill { font-weight: 700; font-size: .82rem; white-space: nowrap; }
+.status-operational { color: #176845; } .status-majorOutage, .status-partialOutage { color: #9d3027; } .status-degradedPerformance, .status-maintenance { color: #805207; }
+.status-admin { max-width: 980px; margin: 0 auto; padding: 2rem; }
+@media (max-width: 600px) { .status-list li { align-items: flex-start; flex-direction: column; } .public-status { padding-top: 1.5rem; } }
