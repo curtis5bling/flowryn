@@ -77,6 +77,10 @@ No additional environment variables or paging providers are needed. Continue dep
 
 ## Commands
 
+## Service reliability (Milestone 9)
+
+Choose **Reliability** for the workspace service catalog, bounded dependency impact, immutable SLO versions, server-calculated error budgets, and HTTPS synthetic monitoring. The existing durable automation worker executes leased checks and stores sanitized history. See [Service catalog, SLO and monitor semantics](docs/RELIABILITY.md).
+
 `npm run build` builds every package. `npm run lint` checks source quality. `npm run typecheck` validates all TypeScript projects. `npm test` runs Vitest. `npm run format:check` verifies formatting.
 
 ## Documentation
@@ -85,6 +89,7 @@ No additional environment variables or paging providers are needed. Continue dep
 - [Roadmap](docs/ROADMAP.md)
 - [Incident API and state machine](docs/INCIDENTS.md)
 - [On-call schedules, alerts and escalation](docs/ONCALL.md)
+- [Service catalog, SLOs and synthetic monitoring](docs/RELIABILITY.md)
 # Public service health
 
 Flowryn includes workspace-managed public status pages, sanitized public incident updates, scheduled maintenance, and privacy-conscious subscriptions. See [Public status pages](docs/STATUS_PAGES.md) for the publication boundary, API/cache behavior, worker recovery, and availability methodology.

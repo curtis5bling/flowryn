@@ -22,6 +22,7 @@ import { NotificationModel } from '../models/Notification.js';
 import { TaskModel } from '../models/Task.js';
 import { claimEscalation, processEscalation, resumeSuppressedAlert } from '../oncall/escalation.js';
 import { createAlert } from '../oncall/service.js';
+import { processReliabilityWork } from '../reliability/service.js';
 import { configuredStatusDeliveryAdapter } from '../status/adapter.js';
 import { processStatusWork } from '../status/worker.js';
 
@@ -694,6 +695,7 @@ export class AutomationWorker {
   private wake?: () => void;
   private workKind = 0;
   private statusRunning = false;
+  private reliabilityRunning = false;
   ready = false;
   constructor(
     readonly concurrency = 4,
@@ -736,6 +738,15 @@ export class AutomationWorker {
                   this.statusRunning = true;
                   return processStatusWork(new Date(), this.id, configuredStatusDeliveryAdapter())
                     .finally(() => { this.statusRunning = false; });
+                },
+          async () =>
+            this.reliabilityRunning
+              ? null
+              : () => {
+                  this.reliabilityRunning = true;
+                  return processReliabilityWork(new Date(), this.id)
+                    .then(() => undefined)
+                    .finally(() => { this.reliabilityRunning = false; });
                 },
         ];
         let execute: (() => Promise<void>) | null = null;

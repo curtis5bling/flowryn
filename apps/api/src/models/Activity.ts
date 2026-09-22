@@ -6,7 +6,7 @@ const activitySchema = new Schema(
     actorId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
     entityType: {
       type: String,
-      enum: ['project', 'task', 'incident', 'automation', 'oncall', 'alert', 'status'],
+      enum: ['project', 'task', 'incident', 'automation', 'oncall', 'alert', 'status', 'reliability'],
       required: true,
     },
     entityId: { type: Schema.Types.ObjectId, required: true, index: true },

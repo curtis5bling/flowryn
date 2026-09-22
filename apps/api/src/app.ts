@@ -14,6 +14,7 @@ import incidentsRouter from './routes/incidents.js';
 import oncallRouter from './routes/oncall.js';
 import projectsRouter from './routes/projects.js';
 import publicStatusRouter from './routes/public-status.js';
+import reliabilityRouter from './routes/reliability.js';
 import statusRouter from './routes/status.js';
 import workspacesRouter from './routes/workspaces.js';
 
@@ -53,6 +54,7 @@ export const createApp = () => {
   app.use('/api/auth', authRouter);
   app.use('/api/status', publicStatusRouter);
   app.use('/api/workspaces', statusRouter);
+  app.use('/api/workspaces', reliabilityRouter);
   app.use('/api/workspaces', oncallRouter);
   app.use('/api/workspaces', automationRouter);
   app.use('/api/workspaces', incidentsRouter);
