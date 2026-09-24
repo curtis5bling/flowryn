@@ -253,6 +253,18 @@ export const realtimeEventNameSchema = z.enum([
   'escalation.advanced',
   'escalation.deliveryFailed',
   'alert.incidentLinked',
+  'service.created',
+  'service.updated',
+  'service.archived',
+  'service.dependencyChanged',
+  'slo.created',
+  'slo.updated',
+  'slo.breached',
+  'slo.recovered',
+  'slo.errorBudgetThresholdReached',
+  'monitor.failed',
+  'monitor.recovered',
+  'monitor.healthChanged',
 ]);
 export const realtimeEventSchema = z.object({
   eventId: z.string(),

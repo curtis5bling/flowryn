@@ -30,7 +30,7 @@ sampleSchema.index({ workspaceId: 1, sloId: 1, timestamp: 1 });
 sampleSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 export const SliSampleModel = model('SliSample', sampleSchema);
 
-const evaluationSchema = new Schema({ workspaceId: objectId, serviceId: objectId, sloId: objectId, sloVersion: Number, windowStart: Date, windowEnd: Date, state: String, good: Number, total: Number, compliance: Number, remainingBudget: Number, consumption: Number, shortBurnRate: Number, longBurnRate: Number, breaching: Boolean }, { timestamps: true });
+const evaluationSchema = new Schema({ workspaceId: objectId, serviceId: objectId, sloId: objectId, objectiveKey: String, sloVersion: Number, windowStart: Date, windowEnd: Date, shortWindowStart: Date, longWindowStart: Date, burnWindows: [Schema.Types.Mixed], state: String, good: Number, total: Number, compliance: Number, remainingBudget: Number, consumption: Number, shortBurnRate: Number, longBurnRate: Number, breaching: Boolean, breachedAt: Date, recoveredAt: Date }, { timestamps: true });
 evaluationSchema.index({ workspaceId: 1, sloId: 1, windowEnd: -1 });
 evaluationSchema.index({ sloId: 1, sloVersion: 1, windowEnd: 1 }, { unique: true });
 export const SloEvaluationModel = model('SloEvaluation', evaluationSchema);
@@ -40,9 +40,10 @@ monitorSchema.index({ enabled: 1, archivedAt: 1, nextRunAt: 1, leaseExpiresAt: 1
 monitorSchema.index({ workspaceId: 1, serviceId: 1, archivedAt: 1 });
 export const SyntheticMonitorModel = model('SyntheticMonitor', monitorSchema);
 
-const runSchema = new Schema({ workspaceId: objectId, serviceId: objectId, monitorId: objectId, scheduledAt: Date, idempotencyKey: String, status: String, endpointHealthy: Boolean, statusCode: Number, latencyMs: Number, errorCode: String, attemptCount: Number, leaseOwner: String, startedAt: Date, completedAt: Date }, { timestamps: true });
+const runSchema = new Schema({ workspaceId: objectId, serviceId: objectId, monitorId: objectId, scheduledAt: Date, idempotencyKey: String, status: { type: String, enum: ['queued', 'running', 'completed', 'retrying', 'deadLetter'] }, endpointHealthy: Boolean, statusCode: Number, latencyMs: Number, errorCode: String, attemptCount: { type: Number, default: 0 }, nextAttemptAt: Date, leaseOwner: String, leaseExpiresAt: Date, startedAt: Date, completedAt: Date }, { timestamps: true });
 runSchema.index({ monitorId: 1, idempotencyKey: 1 }, { unique: true });
 runSchema.index({ workspaceId: 1, monitorId: 1, scheduledAt: -1 });
+runSchema.index({ status: 1, nextAttemptAt: 1, leaseExpiresAt: 1 });
 export const SyntheticMonitorRunModel = model('SyntheticMonitorRun', runSchema);
 
 export const reliabilityModels = [ServiceModel, ServiceDependencyModel, ReliabilityGraphLockModel, ServiceRelationshipModel, ServiceLevelObjectiveModel, SliSampleModel, SloEvaluationModel, SyntheticMonitorModel, SyntheticMonitorRunModel];

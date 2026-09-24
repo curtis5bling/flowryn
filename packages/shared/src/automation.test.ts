@@ -47,4 +47,9 @@ describe('bounded automation contracts', () => {
       }).success,
     ).toBe(false);
   });
+  it('validates explicit automation SLI actions and reliability triggers', () => {
+    const action = { id: '55555555-5555-4555-8555-555555555556', type: 'sli.ingest', serviceId: '507f1f77bcf86cd799439011', sloId: '507f1f77bcf86cd799439012', good: 9, total: 10, metadata: {} };
+    expect(automationRuleSchema.safeParse({ ...rule, triggerType: 'monitor.failed', actions: [action] }).success).toBe(true);
+    expect(automationRuleSchema.safeParse({ ...rule, actions: [{ ...action, good: 11 }] }).success).toBe(false);
+  });
 });

@@ -20,20 +20,22 @@ export const sloInputSchema = z.object({
   serviceId: id, name: text(120).min(1), description: text(2000).default(''), enabled: z.boolean().default(true), indicatorType: z.enum(['availability', 'errorRate', 'latency']),
   objectiveTarget: z.number().gt(0).lt(100), rollingWindowDays: z.union([z.literal(7), z.literal(28), z.literal(30), z.literal(90)]),
   latencyThresholdMs: z.number().int().positive().max(300000).optional(), percentile: z.union([z.literal(50), z.literal(90), z.literal(95), z.literal(99)]).optional(),
-  dataSource: z.object({ type: z.enum(['api', 'synthetic']), sourceId: id.transform((value) => value.toLowerCase()).optional() }), missingDataPolicy: z.enum(['unknown', 'bad', 'skip']),
-  burnRateAlerts: z.array(z.object({ shortWindowMinutes: z.number().int().min(5).max(1440), longWindowMinutes: z.number().int().min(60).max(10080), threshold: z.number().positive().max(100), escalationPolicyId: id.optional() })).max(0, 'Burn-rate alert delivery is not configured'),
+  dataSource: z.object({ type: z.enum(['api', 'webhook', 'synthetic', 'automation']), sourceId: id.transform((value) => value.toLowerCase()).optional() }), missingDataPolicy: z.enum(['unknown', 'bad', 'skip']),
+  burnRateAlerts: z.array(z.object({ shortWindowMinutes: z.number().int().min(5).max(1440), longWindowMinutes: z.number().int().min(60).max(10080), threshold: z.number().positive().max(100), recoveryThreshold: z.number().nonnegative().max(100).optional(), escalationPolicyId: id.optional() }).refine((v) => v.shortWindowMinutes < v.longWindowMinutes, 'Short window must be shorter than long window')).max(5),
 }).superRefine((value, context) => {
   if (value.dataSource.type === 'api' && value.dataSource.sourceId) context.addIssue({ code: 'custom', message: 'API objectives do not accept a source ID' });
-  if (value.indicatorType === 'latency') context.addIssue({ code: 'custom', message: 'Latency objectives are not configured' });
+  if (value.dataSource.type !== 'api' && !value.dataSource.sourceId) context.addIssue({ code: 'custom', message: 'External sources require a source ID' });
   if (value.indicatorType === 'latency' && (!value.latencyThresholdMs || !value.percentile)) context.addIssue({ code: 'custom', message: 'Latency threshold and percentile required' });
   if (value.indicatorType !== 'latency' && (value.latencyThresholdMs || value.percentile)) context.addIssue({ code: 'custom', message: 'Latency fields apply only to latency objectives' });
 });
 export const sliSampleSchema = z.object({
-  serviceId: id, sloId: id, timestamp: z.string().datetime(), good: z.number().int().min(0).max(1_000_000_000), total: z.number().int().min(0).max(1_000_000_000),
+  serviceId: id, sloId: id, timestamp: z.string().datetime(), good: z.number().int().min(0).max(1_000_000_000).optional(), total: z.number().int().min(0).max(1_000_000_000).optional(),
   latencyMs: z.array(z.number().min(0).max(300000)).max(1000).optional(), idempotencyKey: z.string().regex(/^[a-zA-Z0-9_.:-]{8,128}$/),
   metadata: z.record(z.string().regex(/^[a-zA-Z0-9_.-]{1,40}$/), text(100)).refine((x) => Object.keys(x).length <= 20),
-}).refine((x) => x.good <= x.total, { message: 'Good events cannot exceed total events' });
+}).superRefine((x, context) => { if ((x.good === undefined) !== (x.total === undefined)) context.addIssue({ code: 'custom', message: 'Good and total counts must be supplied together' }); if (x.good !== undefined && x.total !== undefined && x.good > x.total) context.addIssue({ code: 'custom', message: 'Good events cannot exceed total events' }); if (x.good === undefined && !x.latencyMs?.length) context.addIssue({ code: 'custom', message: 'Counts or latency observations required' }); });
 export const sliBatchSchema = z.object({ samples: z.array(sliSampleSchema).min(1).max(100) });
+export const signedSliBatchSchema = sliBatchSchema.extend({ schemaVersion: z.literal(1), eventType: z.literal('sli.received') });
+export const reliabilityMetricsQuerySchema = z.object({ from: z.string().datetime().optional(), to: z.string().datetime().optional() }).refine((q) => !q.from || !q.to || (q.from <= q.to && Date.parse(q.to) - Date.parse(q.from) <= 90 * 86400_000), 'Metrics range must be at most 90 days');
 export const monitorInputSchema = z.object({
   serviceId: id, sloId: id.optional().nullable(), name: text(120).min(1), enabled: z.boolean().default(false), url: z.string().url().max(500), method: z.enum(['GET', 'HEAD']),
   intervalSeconds: z.number().int().min(60).max(86400), timeoutMs: z.number().int().min(500).max(10000), maxRedirects: z.number().int().min(0).max(3),

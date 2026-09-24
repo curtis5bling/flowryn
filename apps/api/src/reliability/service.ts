@@ -3,14 +3,23 @@ import { lookup } from 'node:dns/promises';
 import { request as httpsRequest } from 'node:https';
 import { isIP } from 'node:net';
 
+import type { sliBatchSchema } from '@flowryn/shared';
 import mongoose from 'mongoose';
 import type { ClientSession } from 'mongoose';
+import type { z } from 'zod';
 
+import { publishAutomationHint } from '../automation/hints.js';
+import { emitDomainEvent } from '../automation/outbox.js';
+import { automationActorId, automationPrincipal, type AutomationContext } from '../automation/principal.js';
 import { decryptSecret } from '../automation/security.js';
 import { publicAddress } from '../automation/security.js';
 import { IncidentError } from '../incidents/service.js';
+import { AlertModel } from '../oncall/models.js';
+import { cancelEscalations, createAlert, selectPolicy, startEscalation } from '../oncall/service.js';
+import { publishRealtimeEvent } from '../realtime/gateway.js';
 
 import { ServiceDependencyModel, ServiceLevelObjectiveModel, ServiceModel, SliSampleModel, SloEvaluationModel, SyntheticMonitorModel, SyntheticMonitorRunModel } from './models.js';
+
 
 export const normalizeServiceSlug = (value: string) => value.normalize('NFKC').toLowerCase();
 export const nextMonitorRunAt = (now: Date, intervalSeconds: number) => new Date(now.getTime() + intervalSeconds * 1000);
@@ -43,26 +52,75 @@ export const dependencyImpact = async (workspaceId: string, serviceId: string, d
   return { serviceIds: [...visited].slice(1), edges };
 };
 export const wouldCreateCycle = async (workspaceId: string, upstream: string, downstream: string, session?: ClientSession) => (await dependencyImpact(workspaceId, upstream.toLowerCase(), 'upstream', 10, 500, session)).serviceIds.includes(downstream.toLowerCase());
+export const ingestSliBatch = async (input: { workspaceId: string; source: 'api' | 'webhook' | 'automation'; sourceId?: string; batch: z.infer<typeof sliBatchSchema>; now?: Date; session?: ClientSession }) => {
+  const now = input.now ?? new Date();
+  const samples = input.batch.samples.map((sample) => ({ ...sample, serviceId: sample.serviceId.toLowerCase(), sloId: sample.sloId.toLowerCase() }));
+  const sloIds = [...new Set(samples.map((sample) => sample.sloId))];
+  const slos = await ServiceLevelObjectiveModel.find({ workspaceId: input.workspaceId, _id: { $in: sloIds }, enabled: true, archivedAt: null }).limit(101).session(input.session ?? null);
+  if (slos.length !== sloIds.length) throw new IncidentError(400, 'Active workspace SLOs required');
+  const byId = new Map(slos.map((slo) => [slo.id, slo]));
+  const operations = samples.map((sample) => {
+    const timestamp = new Date(sample.timestamp); const slo = byId.get(sample.sloId)!; const source = slo.dataSource as { type: string; sourceId?: string };
+    if (timestamp.getTime() > now.getTime() + 300_000 || timestamp.getTime() < now.getTime() - 7 * 86400_000) throw new IncidentError(400, 'Sample timestamp outside ingestion window');
+    if (String(slo.serviceId) !== sample.serviceId || source.type !== input.source || (source.sourceId && source.sourceId !== input.sourceId)) throw new IncidentError(400, 'SLO source is not eligible');
+    const observations = sample.latencyMs ?? []; const total = sample.total ?? observations.length; const good = sample.good ?? observations.filter((value) => value <= slo.latencyThresholdMs!).length;
+    if (slo.indicatorType === 'latency' && !observations.length) throw new IncidentError(400, 'Latency observations required');
+    if (slo.indicatorType !== 'latency' && sample.good === undefined) throw new IncidentError(400, 'Good and total counts required');
+    return { updateOne: { filter: { workspaceId: input.workspaceId, idempotencyKey: sample.idempotencyKey }, update: { $setOnInsert: { ...sample, good, total, workspaceId: input.workspaceId, timestamp, bucketAt: new Date(Math.floor(timestamp.getTime() / 300000) * 300000), sloVersion: slo.version, source: input.source, ...(input.sourceId ? { sourceId: input.sourceId } : {}), expiresAt: new Date(now.getTime() + 400 * 86400_000) } }, upsert: true } };
+  });
+  const result = await SliSampleModel.bulkWrite(operations as Parameters<typeof SliSampleModel.bulkWrite>[0], { ordered: false, ...(input.session ? { session: input.session } : {}) });
+  return { accepted: result.upsertedCount, duplicates: samples.length - result.upsertedCount };
+};
 export const calculateEvaluation = async (workspaceId: string, slo: InstanceType<typeof ServiceLevelObjectiveModel>, now = new Date()) => {
   const windowStart = new Date(now.getTime() - slo.rollingWindowDays! * 86400_000);
   const source = slo.dataSource as { type: string; sourceId?: string };
   const aggregate = async (start: Date) => (await SliSampleModel.aggregate([{ $match: { workspaceId: slo.workspaceId, sloId: slo._id, sloVersion: slo.version, source: source.type, ...(source.sourceId ? { sourceId: source.sourceId } : {}), timestamp: { $gte: start, $lte: now } } }, { $group: { _id: null, good: { $sum: '$good' }, total: { $sum: '$total' } } }]))[0] ?? { good: 0, total: 0 };
-  const configured = slo.burnRateAlerts?.[0] as { shortWindowMinutes?: number; longWindowMinutes?: number } | undefined;
-  const [samples, short, long] = await Promise.all([
-    aggregate(windowStart),
-    aggregate(new Date(now.getTime() - (configured?.shortWindowMinutes ?? 60) * 60000)),
-    aggregate(new Date(now.getTime() - (configured?.longWindowMinutes ?? 360) * 60000)),
-  ]);
+  const configuredRules = [...(slo.burnRateAlerts ?? [])].sort((a, b) => (a.shortWindowMinutes ?? 0) - (b.shortWindowMinutes ?? 0) || (a.longWindowMinutes ?? 0) - (b.longWindowMinutes ?? 0)) as Array<{ shortWindowMinutes: number; longWindowMinutes: number; threshold: number; recoveryThreshold?: number; escalationPolicyId?: unknown }>;
+  const configured = configuredRules[0];
+  const shortWindowStart = new Date(now.getTime() - (configured?.shortWindowMinutes ?? 60) * 60000);
+  const longWindowStart = new Date(now.getTime() - (configured?.longWindowMinutes ?? 360) * 60000);
+  const [samples, ...windowSamples] = await Promise.all([aggregate(windowStart), ...configuredRules.flatMap((rule) => [aggregate(new Date(now.getTime() - rule.shortWindowMinutes * 60000)), aggregate(new Date(now.getTime() - rule.longWindowMinutes * 60000))])]);
+  const short = windowSamples[0] ?? await aggregate(shortWindowStart); const long = windowSamples[1] ?? await aggregate(longWindowStart);
   const { good = 0, total = 0 } = samples;
   const compliance = total ? good / total : null; const target = slo.objectiveTarget! / 100; const allowed = 1 - target;
   const consumption = total && allowed > 0 ? (1 - compliance!) / allowed : null;
   const state = total ? (compliance! >= target ? 'healthy' : 'breaching') : slo.missingDataPolicy === 'bad' ? 'breaching' : 'unknown';
   const burn = (sample: { good: number; total: number }) => sample.total && allowed > 0 ? (1 - sample.good / sample.total) / allowed : null;
-  return { workspaceId, serviceId: slo.serviceId, sloId: slo._id, sloVersion: slo.version, windowStart, windowEnd: now, state, good, total, compliance, remainingBudget: consumption === null ? null : Math.max(0, 1 - consumption), consumption, shortBurnRate: burn(short), longBurnRate: burn(long), breaching: state === 'breaching' };
+  const burnWindows = configuredRules.map((rule, index) => { const shortRate = burn(windowSamples[index * 2]!); const longRate = burn(windowSamples[index * 2 + 1]!); const recoveryThreshold = rule.recoveryThreshold ?? rule.threshold * 0.5; return { shortWindowMinutes: rule.shortWindowMinutes, longWindowMinutes: rule.longWindowMinutes, threshold: rule.threshold, recoveryThreshold, escalationPolicyId: rule.escalationPolicyId, shortBurnRate: shortRate, longBurnRate: longRate, breached: shortRate !== null && longRate !== null && shortRate >= rule.threshold && longRate >= rule.threshold, recovered: shortRate !== null && longRate !== null && shortRate < recoveryThreshold && longRate < recoveryThreshold }; });
+  const shortBurnRate = burn(short); const longBurnRate = burn(long); const thresholdBreached = burnWindows.some((window) => window.breached);
+  return { workspaceId, serviceId: slo.serviceId, sloId: slo._id, objectiveKey: slo.objectiveKey, sloVersion: slo.version, windowStart, windowEnd: now, shortWindowStart, longWindowStart, burnWindows, state, good, total, compliance, remainingBudget: consumption === null ? null : Math.max(0, 1 - consumption), consumption, shortBurnRate, longBurnRate, breaching: state === 'breaching' || thresholdBreached };
 };
 export const storeEvaluation = async (workspaceId: string, slo: InstanceType<typeof ServiceLevelObjectiveModel>, now = new Date()) => {
   const result = await calculateEvaluation(workspaceId, slo, now);
-  await SloEvaluationModel.updateOne({ sloId: slo._id, sloVersion: slo.version, windowEnd: now }, { $setOnInsert: result }, { upsert: true });
+  let transition: 'breached' | 'recovered' | undefined;
+  let budgetThresholdReached = false;
+  const session = await mongoose.startSession();
+  try { await session.withTransaction(async () => {
+    const previous = await SloEvaluationModel.findOne({ workspaceId, sloId: slo._id, windowEnd: { $lt: now } }).sort({ windowEnd: -1 }).session(session);
+    if (previous?.breaching && result.state !== 'breaching' && result.burnWindows.some((window) => !window.recovered)) result.breaching = true;
+    await SloEvaluationModel.updateOne({ sloId: slo._id, sloVersion: slo.version, windowEnd: now }, { $setOnInsert: { ...result, ...(result.breaching && !previous?.breaching ? { breachedAt: now } : {}), ...(!result.breaching && previous?.breaching ? { recoveredAt: now } : {}) } }, { upsert: true, session });
+    const context: AutomationContext = { principal: automationPrincipal, configuredBy: String(slo.updatedBy), correlationId: `slo:${slo.objectiveKey}`, causationId: `evaluation:${slo.id}:${now.toISOString()}`, chainDepth: 0, rulePath: [] };
+    const payload = { actorId: automationActorId, serviceId: String(slo.serviceId), sloId: slo.id, sloVersion: slo.version, windowStart: result.windowStart.toISOString(), windowEnd: now.toISOString(), ...(result.longBurnRate === null ? {} : { burnRate: result.longBurnRate }), ...(result.remainingBudget === null ? {} : { remainingBudget: result.remainingBudget }) };
+    if (result.breaching && !previous?.breaching) {
+      transition = 'breached';
+      const rule = result.burnWindows.find((window) => window.breached) ?? result.burnWindows[0];
+      const hash = createHash('sha256').update(`slo-breach:${slo.objectiveKey}:${slo.version}:${now.toISOString()}`).digest('hex');
+      const operationId = `${hash.slice(0, 8)}-${hash.slice(8, 12)}-4${hash.slice(13, 16)}-8${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
+      const fields = { operationId, fingerprint: `slo:${slo.objectiveKey}`, title: `SLO breached: ${slo.name}`, summary: `Version ${slo.version}; evaluation window ${result.windowStart.toISOString()} to ${now.toISOString()}`, severity: 'sev2' as const, serviceId: String(slo.serviceId), labels: { source: 'flowryn-slo' }, ...(rule?.escalationPolicyId ? { escalationPolicyId: String(rule.escalationPolicyId) } : {}) };
+      const resolved = await AlertModel.findOne({ workspaceId, fingerprint: fields.fingerprint, status: 'resolved' }).session(session);
+      if (resolved) { const selected = await selectPolicy(workspaceId, fields, now, session); resolved.status = 'open'; resolved.cycle += 1; resolved.resolvedAt = undefined; resolved.resolvedBy = undefined; resolved.acknowledgedAt = undefined; resolved.acknowledgedBy = undefined; await resolved.save({ session }); await startEscalation(resolved, selected.policy, session, now, context); }
+      await createAlert({ workspaceId, actorId: automationActorId, session, automation: context, fields });
+      await emitDomainEvent(session, { workspaceId, eventType: 'slo.breached', aggregateType: 'slo', aggregateId: slo.id, payload, context });
+      if (result.remainingBudget !== null && result.remainingBudget <= 0.25) { budgetThresholdReached = true; await emitDomainEvent(session, { workspaceId, eventType: 'slo.errorBudgetThresholdReached', aggregateType: 'slo', aggregateId: slo.id, eventId: `${operationId}:budget`, payload, context }); }
+    } else if (!result.breaching && previous?.breaching) {
+      transition = 'recovered';
+      const alert = await AlertModel.findOne({ workspaceId, fingerprint: `slo:${slo.objectiveKey}`, status: { $ne: 'resolved' } }).session(session);
+      if (alert) { alert.status = 'resolved'; alert.resolvedAt = now; alert.resolvedBy = new mongoose.Types.ObjectId(automationActorId); await alert.save({ session }); await cancelEscalations(workspaceId, alert.id, session); }
+      await emitDomainEvent(session, { workspaceId, eventType: 'slo.recovered', aggregateType: 'slo', aggregateId: slo.id, payload, context });
+    }
+  }); } finally { await session.endSession(); }
+  if (transition) publishRealtimeEvent({ workspaceId, actorId: automationActorId, entityId: slo.id, type: transition === 'breached' ? 'slo.breached' : 'slo.recovered', payload: { serviceId: String(slo.serviceId), sloId: slo.id, sloVersion: slo.version, windowStart: result.windowStart.toISOString(), windowEnd: now.toISOString() } });
+  if (budgetThresholdReached) publishRealtimeEvent({ workspaceId, actorId: automationActorId, entityId: slo.id, type: 'slo.errorBudgetThresholdReached', payload: { serviceId: String(slo.serviceId), sloId: slo.id, sloVersion: slo.version, remainingBudget: result.remainingBudget } });
   return result;
 };
 
@@ -107,7 +165,11 @@ export const processReliabilityWork = async (now = new Date(), owner = 'reliabil
   const monitor = await SyntheticMonitorModel.findOneAndUpdate({ enabled: true, archivedAt: null, nextRunAt: { $lte: now }, ...(requested ? { workspaceId: requested.workspaceId, _id: requested.monitorId } : {}), $or: [{ leaseExpiresAt: null }, { leaseExpiresAt: { $lte: now } }] }, { $set: { leaseOwner, leaseExpiresAt: new Date(now.getTime() + 60000) } }, { new: true, sort: { nextRunAt: 1, _id: 1 } }).select('+secretCiphertext +secretKeyVersion');
   if (!monitor) return false;
   const scheduledAt = monitor.nextRunAt ?? now; const key = createHash('sha256').update(`${monitor.id}:${scheduledAt.toISOString()}`).digest('hex');
-  const run = await SyntheticMonitorRunModel.findOneAndUpdate({ monitorId: monitor._id, idempotencyKey: key }, { $setOnInsert: { workspaceId: monitor.workspaceId, serviceId: monitor.serviceId, scheduledAt, startedAt: now }, $set: { status: 'running', leaseOwner }, $inc: { attemptCount: 1 } }, { upsert: true, new: true });
+  const prior = await SyntheticMonitorRunModel.findOne({ monitorId: monitor._id, idempotencyKey: key });
+  if (prior && (['completed', 'deadLetter'].includes(prior.status!) || (prior.status === 'retrying' && prior.nextAttemptAt && prior.nextAttemptAt > now) || (prior.status === 'running' && prior.leaseExpiresAt && prior.leaseExpiresAt > now))) { await SyntheticMonitorModel.updateOne({ _id: monitor._id, leaseOwner }, { $set: { nextRunAt: prior.status === 'retrying' ? prior.nextAttemptAt : nextMonitorRunAt(now, monitor.intervalSeconds!) }, $unset: { leaseOwner: 1, leaseExpiresAt: 1 } }); return false; }
+  const run = await SyntheticMonitorRunModel.findOneAndUpdate({ monitorId: monitor._id, idempotencyKey: key, $or: [{ status: { $in: ['queued', 'retrying'] } }, { status: 'running', leaseExpiresAt: { $lte: now } }, { status: { $exists: false } }] }, { $setOnInsert: { workspaceId: monitor.workspaceId, serviceId: monitor.serviceId, scheduledAt }, $set: { status: 'running', leaseOwner, leaseExpiresAt: new Date(now.getTime() + 60000), startedAt: now }, $inc: { attemptCount: 1 } }, { upsert: !prior, new: true });
+  if (!run) { await SyntheticMonitorModel.updateOne({ _id: monitor._id, leaseOwner }, { $unset: { leaseOwner: 1, leaseExpiresAt: 1 } }); return false; }
+  let healthTransition: 'failed' | 'recovered' | undefined;
   try {
     const fresh = await SyntheticMonitorModel.findOne({ _id: monitor._id, enabled: true, archivedAt: null, configVersion: monitor.configVersion, leaseOwner, leaseExpiresAt: { $gt: new Date() } }).select('+secretCiphertext +secretKeyVersion');
     if (!fresh) { await SyntheticMonitorRunModel.updateOne({ _id: run._id, status: 'running', leaseOwner }, { $set: { status: 'failed', errorCode: 'MONITOR_CONFIGURATION_CHANGED', completedAt: new Date() }, $unset: { leaseOwner: 1 } }); return true; }
@@ -122,17 +184,23 @@ export const processReliabilityWork = async (now = new Date(), owner = 'reliabil
         const fenced = await SyntheticMonitorModel.findOne({ _id: fresh._id, enabled: true, archivedAt: null, configVersion: fresh.configVersion, leaseOwner, leaseExpiresAt: { $gt: new Date() } }).session(session);
         if (!fenced) throw new Error('LEASE_LOST');
         const slo = fenced.sloId ? await ServiceLevelObjectiveModel.findOne({ workspaceId: fenced.workspaceId, _id: fenced.sloId, serviceId: fenced.serviceId, enabled: true, archivedAt: null, 'dataSource.type': 'synthetic', $or: [{ 'dataSource.sourceId': { $exists: false } }, { 'dataSource.sourceId': String(fenced._id) }] }).session(session) : null;
-        const completed = await SyntheticMonitorRunModel.updateOne({ _id: run._id, status: 'running', leaseOwner }, { $set: { status: 'completed', endpointHealthy: healthy, statusCode: result.statusCode || null, latencyMs: result.latencyMs, errorCode: endpointError ? 'ENDPOINT_UNREACHABLE' : null, completedAt: new Date() }, $unset: { leaseOwner: 1 } }, { session });
+        const completed = await SyntheticMonitorRunModel.updateOne({ _id: run._id, status: 'running', leaseOwner }, { $set: { status: 'completed', endpointHealthy: healthy, statusCode: result.statusCode || null, latencyMs: result.latencyMs, errorCode: endpointError ? 'ENDPOINT_UNREACHABLE' : null, completedAt: new Date() }, $unset: { leaseOwner: 1, leaseExpiresAt: 1, nextAttemptAt: 1 } }, { session });
         if (!completed.modifiedCount) throw new Error('LEASE_LOST');
         const observationGood = healthy && (!slo || slo.indicatorType !== 'latency' || result.latencyMs <= slo.latencyThresholdMs!);
         if (slo) await SliSampleModel.updateOne({ workspaceId: fenced.workspaceId, idempotencyKey: key }, { $setOnInsert: { serviceId: fenced.serviceId, sloId: slo._id, sloVersion: slo.version, timestamp: now, bucketAt: new Date(Math.floor(now.getTime() / 300000) * 300000), good: observationGood ? 1 : 0, total: 1, latencyMs: [result.latencyMs], source: 'synthetic', sourceId: String(fenced._id), metadata: {}, expiresAt: new Date(now.getTime() + 400 * 86400_000) } }, { upsert: true, session });
+        healthTransition = !healthy && fenced.health !== 'failed' ? 'failed' : healthy && fenced.health === 'failed' ? 'recovered' : undefined;
+        if (healthTransition) await emitDomainEvent(session, { workspaceId: String(fenced.workspaceId), eventType: healthTransition === 'failed' ? 'monitor.failed' : 'monitor.recovered', aggregateType: 'monitor', aggregateId: fenced.id, eventId: `${key}:${healthTransition}`, payload: { actorId: automationActorId, serviceId: String(fenced.serviceId), monitorId: fenced.id }, context: { principal: automationPrincipal, configuredBy: String(fenced.updatedBy), correlationId: `monitor:${fenced.id}`, causationId: key, chainDepth: 0, rulePath: [] } });
         const saved = await SyntheticMonitorModel.updateOne({ _id: fenced._id, leaseOwner }, { $set: { health: healthy ? 'healthy' : 'failed', failureCount: healthy ? 0 : fenced.failureCount + 1, nextRunAt: nextMonitorRunAt(now, fenced.intervalSeconds!) }, $unset: { leaseOwner: 1, leaseExpiresAt: 1 } }, { session });
         if (!saved.modifiedCount) throw new Error('LEASE_LOST');
       });
     } finally { await session.endSession(); }
   } catch {
-    await SyntheticMonitorRunModel.updateOne({ _id: run._id, status: 'running', leaseOwner }, { $set: { status: 'failed', errorCode: 'MONITOR_INFRASTRUCTURE_FAILURE', completedAt: new Date() }, $unset: { leaseOwner: 1 } });
-    await SyntheticMonitorModel.updateOne({ _id: monitor._id, leaseOwner }, { $set: { health: 'unknown', nextRunAt: new Date(now.getTime() + 60000) }, $unset: { leaseOwner: 1, leaseExpiresAt: 1 } });
+    const dead = (run.attemptCount ?? 1) >= 5; const retryAt = new Date(now.getTime() + Math.min(3600_000, 30_000 * 2 ** Math.max(0, (run.attemptCount ?? 1) - 1)) + Number.parseInt(key.slice(0, 4), 16) % 5000);
+    await SyntheticMonitorRunModel.updateOne({ _id: run._id, status: 'running', leaseOwner }, { $set: { status: dead ? 'deadLetter' : 'retrying', errorCode: 'MONITOR_INFRASTRUCTURE_FAILURE', ...(dead ? { completedAt: new Date() } : { nextAttemptAt: retryAt }) }, $unset: { leaseOwner: 1, leaseExpiresAt: 1 } });
+    await SyntheticMonitorModel.updateOne({ _id: monitor._id, leaseOwner }, { $set: { health: 'unknown', nextRunAt: dead ? nextMonitorRunAt(now, monitor.intervalSeconds!) : retryAt }, $unset: { leaseOwner: 1, leaseExpiresAt: 1 } });
   }
+  if (healthTransition === 'failed') publishAutomationHint({ workspaceId: String(monitor.workspaceId), actorId: automationActorId, entityId: monitor.id, type: 'monitor.failed' });
+  if (healthTransition === 'recovered') publishRealtimeEvent({ workspaceId: String(monitor.workspaceId), actorId: automationActorId, entityId: monitor.id, type: 'monitor.recovered', payload: { monitorId: monitor.id, serviceId: String(monitor.serviceId) } });
+  if (healthTransition) publishRealtimeEvent({ workspaceId: String(monitor.workspaceId), actorId: automationActorId, entityId: monitor.id, type: 'monitor.healthChanged', payload: { monitorId: monitor.id, serviceId: String(monitor.serviceId), health: healthTransition === 'failed' ? 'failed' : 'healthy' } });
   return true;
 };
