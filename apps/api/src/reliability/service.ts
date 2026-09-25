@@ -73,8 +73,10 @@ export const ingestSliBatch = async (input: { workspaceId: string; source: 'api'
 export const calculateEvaluation = async (workspaceId: string, slo: InstanceType<typeof ServiceLevelObjectiveModel>, now = new Date()) => {
   const windowStart = new Date(now.getTime() - slo.rollingWindowDays! * 86400_000);
   const source = slo.dataSource as { type: string; sourceId?: string };
+  const compatibleVersions = await ServiceLevelObjectiveModel.find({ workspaceId, objectiveKey: slo.objectiveKey, serviceId: slo.serviceId, indicatorType: slo.indicatorType, 'dataSource.type': source.type, ...(source.sourceId ? { 'dataSource.sourceId': source.sourceId } : { 'dataSource.sourceId': { $exists: false } }), ...(slo.indicatorType === 'latency' ? { latencyThresholdMs: slo.latencyThresholdMs, percentile: slo.percentile } : {}) }).select('_id version').lean();
+  const compatibleSamples = compatibleVersions.map((version) => ({ sloId: version._id, sloVersion: version.version }));
   const aggregate = async (start: Date) => {
-    const match = { workspaceId: slo.workspaceId, sloId: slo._id, sloVersion: slo.version, source: source.type, ...(source.sourceId ? { sourceId: source.sourceId } : {}), timestamp: { $gte: start, $lte: now } };
+    const match = { workspaceId: slo.workspaceId, $or: compatibleSamples, source: source.type, ...(source.sourceId ? { sourceId: source.sourceId } : {}), timestamp: { $gte: start, $lte: now } };
     if (slo.indicatorType !== 'latency') return (await SliSampleModel.aggregate([{ $match: match }, { $group: { _id: null, good: { $sum: '$good' }, total: { $sum: '$total' } } }]))[0] ?? { good: 0, total: 0 };
     const rows = await SliSampleModel.aggregate([{ $match: match }, { $unwind: '$latencyMs' }, { $group: { _id: null, percentile: { $percentile: { input: '$latencyMs', p: [slo.percentile! / 100], method: 'approximate' } }, total: { $sum: 1 }, good: { $sum: { $cond: [{ $and: [{ $ne: ['$endpointHealthy', false] }, { $lte: ['$latencyMs', slo.latencyThresholdMs!] }] }, 1, 0] } } } } as never]);
     const row = rows[0] as { percentile?: number[]; total?: number; good?: number } | undefined;
@@ -118,8 +120,7 @@ export const storeEvaluation = async (workspaceId: string, slo: InstanceType<typ
       return;
     }
     const previous = await SloEvaluationModel.findOne({ workspaceId, objectiveKey: slo.objectiveKey, windowEnd: { $lte: now } }).sort({ windowEnd: -1 }).session(session);
-    const activeAlert = await AlertModel.exists({ workspaceId, fingerprint: `slo:${slo.objectiveKey}`, status: { $ne: 'resolved' } }).session(session);
-    const previouslyBreaching = Boolean(previous?.breaching && activeAlert);
+    const previouslyBreaching = Boolean(previous?.breaching);
     if (previouslyBreaching && (result.state !== 'healthy' || result.burnWindows.some((window) => !window.recovered))) result.breaching = true;
     const stored = await SloEvaluationModel.updateOne({ sloId: slo._id, sloVersion: slo.version, windowEnd: now }, { $setOnInsert: { ...result, ...(result.breaching && !previouslyBreaching ? { breachedAt: now } : {}), ...(!result.breaching && previouslyBreaching ? { recoveredAt: now } : {}) } }, { upsert: true, session });
     if (!stored.upsertedCount) return;
