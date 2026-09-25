@@ -19,9 +19,10 @@ const relationshipSchema = new Schema({ workspaceId: objectId, serviceId: object
 relationshipSchema.index({ workspaceId: 1, serviceId: 1, targetType: 1, targetId: 1 }, { unique: true });
 export const ServiceRelationshipModel = model('ServiceRelationship', relationshipSchema);
 
-const sloSchema = new Schema({ ...audit, objectiveKey: { type: String, required: true }, serviceId: objectId, name: String, description: String, enabled: Boolean, indicatorType: String, objectiveTarget: Number, rollingWindowDays: Number, latencyThresholdMs: Number, percentile: Number, dataSource: Schema.Types.Mixed, missingDataPolicy: String, burnRateAlerts: [Schema.Types.Mixed], version: { type: Number, required: true }, archivedAt: Date }, { timestamps: true });
+const sloSchema = new Schema({ ...audit, objectiveKey: { type: String, required: true }, serviceId: objectId, name: String, description: String, enabled: Boolean, indicatorType: String, objectiveTarget: Number, rollingWindowDays: Number, latencyThresholdMs: Number, percentile: Number, dataSource: Schema.Types.Mixed, missingDataPolicy: String, burnRateAlerts: [Schema.Types.Mixed], version: { type: Number, required: true }, nextEvaluationAt: Date, evaluationLeaseOwner: String, evaluationLeaseExpiresAt: Date, archivedAt: Date }, { timestamps: true });
 sloSchema.index({ workspaceId: 1, serviceId: 1, archivedAt: 1 });
 sloSchema.index({ workspaceId: 1, objectiveKey: 1, version: 1 }, { unique: true });
+sloSchema.index({ enabled: 1, archivedAt: 1, nextEvaluationAt: 1, evaluationLeaseExpiresAt: 1 });
 export const ServiceLevelObjectiveModel = model('ServiceLevelObjective', sloSchema);
 
 const sampleSchema = new Schema({ workspaceId: objectId, serviceId: objectId, sloId: objectId, sloVersion: Number, bucketAt: Date, timestamp: Date, good: Number, total: Number, latencyMs: [Number], source: String, sourceId: String, idempotencyKey: String, metadata: Schema.Types.Mixed, expiresAt: Date }, { timestamps: true });
@@ -35,7 +36,7 @@ evaluationSchema.index({ workspaceId: 1, sloId: 1, windowEnd: -1 });
 evaluationSchema.index({ sloId: 1, sloVersion: 1, windowEnd: 1 }, { unique: true });
 export const SloEvaluationModel = model('SloEvaluation', evaluationSchema);
 
-const monitorSchema = new Schema({ ...audit, serviceId: objectId, sloId: Schema.Types.ObjectId, name: String, enabled: Boolean, url: String, method: String, intervalSeconds: Number, timeoutMs: Number, maxRedirects: Number, expectedStatusMin: Number, expectedStatusMax: Number, textAssertion: String, secretCiphertext: { type: String, select: false }, secretKeyVersion: { type: String, select: false }, configVersion: { type: Number, default: 1 }, nextRunAt: Date, leaseOwner: String, leaseExpiresAt: Date, failureCount: { type: Number, default: 0 }, health: { type: String, default: 'unknown' }, archivedAt: Date }, { timestamps: true });
+const monitorSchema = new Schema({ ...audit, serviceId: objectId, sloId: Schema.Types.ObjectId, name: String, enabled: Boolean, url: String, method: String, intervalSeconds: Number, timeoutMs: Number, maxRedirects: Number, expectedStatusMin: Number, expectedStatusMax: Number, textAssertion: String, secretCiphertext: { type: String, select: false }, secretKeyVersion: { type: String, select: false }, configVersion: { type: Number, default: 1 }, nextRunAt: Date, retryScheduledAt: Date, leaseOwner: String, leaseExpiresAt: Date, failureCount: { type: Number, default: 0 }, health: { type: String, default: 'unknown' }, archivedAt: Date }, { timestamps: true });
 monitorSchema.index({ enabled: 1, archivedAt: 1, nextRunAt: 1, leaseExpiresAt: 1 });
 monitorSchema.index({ workspaceId: 1, serviceId: 1, archivedAt: 1 });
 export const SyntheticMonitorModel = model('SyntheticMonitor', monitorSchema);
