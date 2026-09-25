@@ -14,7 +14,7 @@ import { automationActorId, automationPrincipal, type AutomationContext } from '
 import { decryptSecret } from '../automation/security.js';
 import { publicAddress } from '../automation/security.js';
 import { IncidentError } from '../incidents/service.js';
-import { AlertModel } from '../oncall/models.js';
+import { AlertModel, PolicyModel } from '../oncall/models.js';
 import { cancelEscalations, createAlert, selectPolicy, startEscalation } from '../oncall/service.js';
 import { publishRealtimeEvent } from '../realtime/gateway.js';
 
@@ -74,7 +74,15 @@ export const ingestSliBatch = async (input: { workspaceId: string; source: 'api'
 export const calculateEvaluation = async (workspaceId: string, slo: InstanceType<typeof ServiceLevelObjectiveModel>, now = new Date()) => {
   const windowStart = new Date(now.getTime() - slo.rollingWindowDays! * 86400_000);
   const source = slo.dataSource as { type: string; sourceId?: string };
-  const aggregate = async (start: Date) => (await SliSampleModel.aggregate([{ $match: { workspaceId: slo.workspaceId, sloId: slo._id, sloVersion: slo.version, source: source.type, ...(source.sourceId ? { sourceId: source.sourceId } : {}), timestamp: { $gte: start, $lte: now } } }, { $group: { _id: null, good: { $sum: '$good' }, total: { $sum: '$total' } } }]))[0] ?? { good: 0, total: 0 };
+  const aggregate = async (start: Date) => {
+    const match = { workspaceId: slo.workspaceId, sloId: slo._id, sloVersion: slo.version, source: source.type, ...(source.sourceId ? { sourceId: source.sourceId } : {}), timestamp: { $gte: start, $lte: now } };
+    if (slo.indicatorType !== 'latency') return (await SliSampleModel.aggregate([{ $match: match }, { $group: { _id: null, good: { $sum: '$good' }, total: { $sum: '$total' } } }]))[0] ?? { good: 0, total: 0 };
+    const rows = await SliSampleModel.aggregate([{ $match: match }, { $unwind: '$latencyMs' }, { $sort: { latencyMs: 1 } }, { $limit: 100000 }, { $group: { _id: null, values: { $push: '$latencyMs' } } }]);
+    const values = (rows[0]?.values ?? []) as number[];
+    if (!values.length) return { good: 0, total: 0 };
+    const rank = Math.min(values.length - 1, Math.ceil((slo.percentile! / 100) * values.length) - 1);
+    return { good: values[rank]! <= slo.latencyThresholdMs! ? values.length : 0, total: values.length };
+  };
   const configuredRules = [...(slo.burnRateAlerts ?? [])].sort((a, b) => (a.shortWindowMinutes ?? 0) - (b.shortWindowMinutes ?? 0) || (a.longWindowMinutes ?? 0) - (b.longWindowMinutes ?? 0)) as Array<{ shortWindowMinutes: number; longWindowMinutes: number; threshold: number; recoveryThreshold?: number; escalationPolicyId?: unknown }>;
   const configured = configuredRules[0];
   const shortWindowStart = new Date(now.getTime() - (configured?.shortWindowMinutes ?? 60) * 60000);
@@ -115,7 +123,8 @@ export const storeEvaluation = async (workspaceId: string, slo: InstanceType<typ
       const rule = result.burnWindows.find((window) => window.breached) ?? result.burnWindows[0];
       const hash = createHash('sha256').update(`slo-breach:${slo.objectiveKey}:${slo.version}:${now.toISOString()}`).digest('hex');
       const operationId = `${hash.slice(0, 8)}-${hash.slice(8, 12)}-4${hash.slice(13, 16)}-8${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
-      const fields = { operationId, fingerprint: `slo:${slo.objectiveKey}`, title: `SLO breached: ${slo.name}`, summary: `Version ${slo.version}; evaluation window ${result.windowStart.toISOString()} to ${now.toISOString()}`, severity: 'sev2' as const, serviceId: String(slo.serviceId), labels: { source: 'flowryn-slo' }, ...(rule?.escalationPolicyId ? { escalationPolicyId: String(rule.escalationPolicyId) } : {}) };
+      const policyId = rule?.escalationPolicyId && await PolicyModel.exists({ workspaceId, _id: rule.escalationPolicyId, enabled: true, archivedAt: null }).session(session) ? String(rule.escalationPolicyId) : undefined;
+      const fields = { operationId, fingerprint: `slo:${slo.objectiveKey}`, title: `SLO breached: ${slo.name}`, summary: `Version ${slo.version}; evaluation window ${result.windowStart.toISOString()} to ${now.toISOString()}`, severity: 'sev2' as const, serviceId: String(slo.serviceId), labels: { source: 'flowryn-slo' }, ...(policyId ? { escalationPolicyId: policyId } : {}) };
       const resolved = await AlertModel.findOne({ workspaceId, fingerprint: fields.fingerprint, status: 'resolved' }).session(session);
       if (resolved) { const selected = await selectPolicy(workspaceId, fields, now, session); resolved.status = 'open'; resolved.cycle += 1; resolved.resolvedAt = undefined; resolved.resolvedBy = undefined; resolved.acknowledgedAt = undefined; resolved.acknowledgedBy = undefined; await resolved.save({ session }); await startEscalation(resolved, selected.policy, session, now, context); }
       await createAlert({ workspaceId, actorId: automationActorId, session, automation: context, fields });
