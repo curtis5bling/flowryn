@@ -19,7 +19,7 @@ const relationshipSchema = new Schema({ workspaceId: objectId, serviceId: object
 relationshipSchema.index({ workspaceId: 1, serviceId: 1, targetType: 1, targetId: 1 }, { unique: true });
 export const ServiceRelationshipModel = model('ServiceRelationship', relationshipSchema);
 
-const sloSchema = new Schema({ ...audit, objectiveKey: { type: String, required: true }, serviceId: objectId, name: String, description: String, enabled: Boolean, indicatorType: String, objectiveTarget: Number, rollingWindowDays: Number, latencyThresholdMs: Number, percentile: Number, dataSource: Schema.Types.Mixed, missingDataPolicy: String, burnRateAlerts: [Schema.Types.Mixed], version: { type: Number, required: true }, nextEvaluationAt: Date, lastEvaluationAt: Date, evaluationLeaseOwner: String, evaluationLeaseExpiresAt: Date, archivedAt: Date }, { timestamps: true });
+const sloSchema = new Schema({ ...audit, objectiveKey: { type: String, required: true }, serviceId: objectId, name: String, description: String, enabled: Boolean, indicatorType: String, objectiveTarget: Number, rollingWindowDays: Number, latencyThresholdMs: Number, percentile: Number, dataSource: Schema.Types.Mixed, missingDataPolicy: String, burnRateAlerts: [Schema.Types.Mixed], version: { type: Number, required: true }, transitionBaselineAt: Date, nextEvaluationAt: Date, lastEvaluationAt: Date, evaluationLeaseOwner: String, evaluationLeaseExpiresAt: Date, archivedAt: Date }, { timestamps: true });
 sloSchema.index({ workspaceId: 1, serviceId: 1, archivedAt: 1 });
 sloSchema.index({ workspaceId: 1, objectiveKey: 1, version: 1 }, { unique: true });
 sloSchema.index({ enabled: 1, archivedAt: 1, nextEvaluationAt: 1, evaluationLeaseExpiresAt: 1 });
