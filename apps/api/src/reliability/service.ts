@@ -99,6 +99,8 @@ export const calculateEvaluation = async (workspaceId: string, slo: InstanceType
 };
 export const storeEvaluation = async (workspaceId: string, slo: InstanceType<typeof ServiceLevelObjectiveModel>, now = new Date()) => {
   now = new Date(Math.floor(now.getTime() / 60000) * 60000);
+  const persisted = await SloEvaluationModel.findOne({ workspaceId, sloId: slo._id, sloVersion: slo.version, windowEnd: now }).lean();
+  if (persisted) return persisted;
   const result = await calculateEvaluation(workspaceId, slo, now);
   let transition: 'breached' | 'recovered' | undefined;
   let budgetThresholdReached = false;
@@ -198,7 +200,7 @@ export const processReliabilityWork = async (now = new Date(), owner = 'reliabil
   if (!monitor) return false;
   const scheduledAt = monitor.retryScheduledAt ?? monitor.nextRunAt ?? now; const key = createHash('sha256').update(`${monitor.id}:${scheduledAt.toISOString()}`).digest('hex');
   const prior = await SyntheticMonitorRunModel.findOne({ monitorId: monitor._id, idempotencyKey: key });
-  if (prior && (['completed', 'deadLetter'].includes(prior.status!) || (prior.status === 'retrying' && prior.nextAttemptAt && prior.nextAttemptAt > now) || (prior.status === 'running' && prior.leaseExpiresAt && prior.leaseExpiresAt > now))) { await SyntheticMonitorModel.updateOne({ _id: monitor._id, leaseOwner }, { $set: { nextRunAt: prior.status === 'retrying' ? prior.nextAttemptAt : nextMonitorRunAt(now, monitor.intervalSeconds!) }, ...(prior.status === 'retrying' ? {} : { $unset: { retryScheduledAt: 1, leaseOwner: 1, leaseExpiresAt: 1 } }) }); if (prior.status === 'retrying') await SyntheticMonitorModel.updateOne({ _id: monitor._id, leaseOwner }, { $unset: { leaseOwner: 1, leaseExpiresAt: 1 } }); return false; }
+  if (prior && (['completed', 'deadLetter'].includes(prior.status!) || (prior.status === 'retrying' && prior.nextAttemptAt && prior.nextAttemptAt > now) || (prior.status === 'running' && prior.leaseExpiresAt && prior.leaseExpiresAt > now))) { await SyntheticMonitorModel.updateOne({ _id: monitor._id, leaseOwner }, { $set: { nextRunAt: prior.status === 'retrying' ? prior.nextAttemptAt : nextMonitorRunAt(now, monitor.intervalSeconds!), ...(prior.status === 'retrying' ? { retryScheduledAt: prior.scheduledAt } : {}) }, ...(prior.status === 'retrying' ? {} : { $unset: { retryScheduledAt: 1, leaseOwner: 1, leaseExpiresAt: 1 } }) }); if (prior.status === 'retrying') await SyntheticMonitorModel.updateOne({ _id: monitor._id, leaseOwner }, { $unset: { leaseOwner: 1, leaseExpiresAt: 1 } }); return false; }
   const run = await SyntheticMonitorRunModel.findOneAndUpdate({ monitorId: monitor._id, idempotencyKey: key, $or: [{ status: { $in: ['queued', 'retrying'] } }, { status: 'running', leaseExpiresAt: { $lte: now } }, { status: { $exists: false } }] }, { $setOnInsert: { workspaceId: monitor.workspaceId, serviceId: monitor.serviceId, scheduledAt }, $set: { status: 'running', leaseOwner, leaseExpiresAt: new Date(now.getTime() + 60000), startedAt: now }, $inc: { attemptCount: 1 } }, { upsert: !prior, new: true });
   if (!run) { await SyntheticMonitorModel.updateOne({ _id: monitor._id, leaseOwner }, { $unset: { leaseOwner: 1, leaseExpiresAt: 1 } }); return false; }
   let healthTransition: 'failed' | 'recovered' | undefined;
