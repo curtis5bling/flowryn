@@ -97,8 +97,8 @@ export const storeEvaluation = async (workspaceId: string, slo: InstanceType<typ
   const session = await mongoose.startSession();
   try { await session.withTransaction(async () => {
     transition = undefined; budgetThresholdReached = false;
-    const previous = await SloEvaluationModel.findOne({ workspaceId, sloId: slo._id, windowEnd: { $lt: now } }).sort({ windowEnd: -1 }).session(session);
-    if (previous?.breaching && result.state !== 'breaching' && result.burnWindows.some((window) => !window.recovered)) result.breaching = true;
+    const previous = await SloEvaluationModel.findOne({ workspaceId, objectiveKey: slo.objectiveKey, windowEnd: { $lte: now } }).sort({ windowEnd: -1 }).session(session);
+    if (previous?.breaching && (result.state !== 'healthy' || result.burnWindows.some((window) => !window.recovered))) result.breaching = true;
     const stored = await SloEvaluationModel.updateOne({ sloId: slo._id, sloVersion: slo.version, windowEnd: now }, { $setOnInsert: { ...result, ...(result.breaching && !previous?.breaching ? { breachedAt: now } : {}), ...(!result.breaching && previous?.breaching ? { recoveredAt: now } : {}) } }, { upsert: true, session });
     if (!stored.upsertedCount) return;
     const context: AutomationContext = { principal: automationPrincipal, configuredBy: String(slo.updatedBy), correlationId: `slo:${slo.objectiveKey}`, causationId: `evaluation:${slo.id}:${now.toISOString()}`, chainDepth: 0, rulePath: [] };
@@ -183,8 +183,8 @@ export const processReliabilityWork = async (now = new Date(), owner = 'reliabil
   let healthTransition: 'failed' | 'recovered' | undefined;
   try {
     const fresh = await SyntheticMonitorModel.findOne({ _id: monitor._id, enabled: true, archivedAt: null, configVersion: monitor.configVersion, leaseOwner, leaseExpiresAt: { $gt: new Date() } }).select('+secretCiphertext +secretKeyVersion');
-    if (!fresh) { await SyntheticMonitorRunModel.updateOne({ _id: run._id, status: 'running', leaseOwner }, { $set: { status: 'failed', errorCode: 'MONITOR_CONFIGURATION_CHANGED', completedAt: new Date() }, $unset: { leaseOwner: 1 } }); return true; }
-    if (!(await ServiceModel.exists({ workspaceId: fresh.workspaceId, _id: fresh.serviceId, archivedAt: null }))) { await SyntheticMonitorModel.updateOne({ _id: fresh._id, leaseOwner }, { $set: { enabled: false, health: 'unknown' }, $unset: { leaseOwner: 1, leaseExpiresAt: 1 } }); await SyntheticMonitorRunModel.updateOne({ _id: run._id, status: 'running', leaseOwner }, { $set: { status: 'failed', errorCode: 'SERVICE_ARCHIVED', completedAt: new Date() }, $unset: { leaseOwner: 1 } }); return true; }
+    if (!fresh) { await SyntheticMonitorRunModel.updateOne({ _id: run._id, status: 'running', leaseOwner }, { $set: { status: 'completed', errorCode: 'MONITOR_CONFIGURATION_CHANGED', completedAt: new Date() }, $unset: { leaseOwner: 1, leaseExpiresAt: 1 } }); await SyntheticMonitorModel.updateOne({ _id: monitor._id, leaseOwner }, { $set: { nextRunAt: nextMonitorRunAt(now, monitor.intervalSeconds!) }, $unset: { retryScheduledAt: 1, leaseOwner: 1, leaseExpiresAt: 1 } }); return true; }
+    if (!(await ServiceModel.exists({ workspaceId: fresh.workspaceId, _id: fresh.serviceId, archivedAt: null }))) { await SyntheticMonitorModel.updateOne({ _id: fresh._id, leaseOwner }, { $set: { enabled: false, health: 'unknown' }, $unset: { retryScheduledAt: 1, leaseOwner: 1, leaseExpiresAt: 1 } }); await SyntheticMonitorRunModel.updateOne({ _id: run._id, status: 'running', leaseOwner }, { $set: { status: 'completed', errorCode: 'SERVICE_ARCHIVED', completedAt: new Date() }, $unset: { leaseOwner: 1, leaseExpiresAt: 1 } }); return true; }
     const headers = fresh.secretCiphertext ? JSON.parse(decryptSecret({ workspaceId: fresh.workspaceId, _id: fresh._id, keyVersion: fresh.secretKeyVersion!, credentials: fresh.secretCiphertext })) : {};
     let endpointError = false;
     const result = await network({ url: assertSafeMonitorUrl(fresh.url!), method: fresh.method as 'GET' | 'HEAD', timeoutMs: fresh.timeoutMs!, maxRedirects: fresh.maxRedirects!, headers, assertion: fresh.textAssertion ?? undefined }).catch((error) => { if (infrastructureNetworkError(error)) throw error; endpointError = true; return { statusCode: 0, latencyMs: fresh.timeoutMs!, body: '' }; });

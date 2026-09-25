@@ -203,7 +203,7 @@ export const automationPayloadSchema = z
     sloVersion: z.number().int().positive().optional(),
     windowStart: z.string().datetime().optional(),
     windowEnd: z.string().datetime().optional(),
-    burnRate: z.number().nonnegative().max(10000).optional(),
+    burnRate: z.number().nonnegative().max(1_000_000_000).optional(),
     remainingBudget: z.number().min(0).max(1).optional(),
   })
   .strict();
