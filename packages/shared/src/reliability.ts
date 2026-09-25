@@ -18,7 +18,7 @@ export const dependencyInputSchema = z.object({
 export const relationshipInputSchema = z.object({ serviceId: id, targetType: z.enum(['statusComponent', 'incident', 'alert', 'escalationPolicy', 'project']), targetId: id });
 export const sloInputSchema = z.object({
   serviceId: id, name: text(120).min(1), description: text(2000).default(''), enabled: z.boolean().default(true), indicatorType: z.enum(['availability', 'errorRate', 'latency']),
-  objectiveTarget: z.number().gt(0).lt(100), rollingWindowDays: z.union([z.literal(7), z.literal(28), z.literal(30), z.literal(90)]),
+  objectiveTarget: z.number().gt(0).max(99.9999999), rollingWindowDays: z.union([z.literal(7), z.literal(28), z.literal(30), z.literal(90)]),
   latencyThresholdMs: z.number().int().positive().max(300000).optional(), percentile: z.union([z.literal(50), z.literal(90), z.literal(95), z.literal(99)]).optional(),
   dataSource: z.object({ type: z.enum(['api', 'webhook', 'synthetic', 'automation']), sourceId: id.transform((value) => value.toLowerCase()).optional() }), missingDataPolicy: z.enum(['unknown', 'bad', 'skip']),
   burnRateAlerts: z.array(z.object({ shortWindowMinutes: z.number().int().min(5).max(1440), longWindowMinutes: z.number().int().min(60).max(10080), threshold: z.number().positive().max(100), recoveryThreshold: z.number().nonnegative().max(100).optional(), escalationPolicyId: id.optional() }).refine((v) => v.shortWindowMinutes < v.longWindowMinutes, 'Short window must be shorter than long window')).max(5),
