@@ -111,7 +111,11 @@ export const storeEvaluation = async (workspaceId: string, slo: InstanceType<typ
       { $set: { lastEvaluationAt: now } },
       { session },
     );
-    if (!active.modifiedCount) return;
+    if (!active.modifiedCount) {
+      const existing = await SloEvaluationModel.findOne({ sloId: slo._id, sloVersion: slo.version, windowEnd: now }).session(session).lean();
+      if (existing) Object.assign(result, existing);
+      return;
+    }
     const previous = await SloEvaluationModel.findOne({ workspaceId, objectiveKey: slo.objectiveKey, windowEnd: { $lte: now } }).sort({ windowEnd: -1 }).session(session);
     const activeAlert = await AlertModel.exists({ workspaceId, fingerprint: `slo:${slo.objectiveKey}`, status: { $ne: 'resolved' } }).session(session);
     const previouslyBreaching = Boolean(previous?.breaching && activeAlert);
