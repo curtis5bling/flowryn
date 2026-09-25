@@ -16,7 +16,6 @@ import { publicAddress } from '../automation/security.js';
 import { IncidentError } from '../incidents/service.js';
 import { AlertModel, PolicyModel } from '../oncall/models.js';
 import { cancelEscalations, createAlert, selectPolicy, startEscalation } from '../oncall/service.js';
-import { publishRealtimeEvent } from '../realtime/gateway.js';
 
 import { ServiceDependencyModel, ServiceLevelObjectiveModel, ServiceModel, SliSampleModel, SloEvaluationModel, SyntheticMonitorModel, SyntheticMonitorRunModel } from './models.js';
 
@@ -143,8 +142,8 @@ export const storeEvaluation = async (workspaceId: string, slo: InstanceType<typ
     }
     if (result.remainingBudget !== null && result.remainingBudget <= 0.25 && (previous?.remainingBudget == null || previous.remainingBudget > 0.25)) { const eventId = createHash('sha256').update(`slo-budget:${slo.objectiveKey}:${slo.version}:${now.toISOString()}`).digest('hex'); budgetThresholdReached = true; await emitDomainEvent(session, { workspaceId, eventType: 'slo.errorBudgetThresholdReached', aggregateType: 'slo', aggregateId: slo.id, eventId, payload, context }); }
   }); } finally { await session.endSession(); }
-  if (transition) publishRealtimeEvent({ workspaceId, actorId: automationActorId, entityId: slo.id, type: transition === 'breached' ? 'slo.breached' : 'slo.recovered', payload: { serviceId: String(slo.serviceId), sloId: slo.id, sloVersion: slo.version, windowStart: result.windowStart.toISOString(), windowEnd: now.toISOString() } });
-  if (budgetThresholdReached) publishRealtimeEvent({ workspaceId, actorId: automationActorId, entityId: slo.id, type: 'slo.errorBudgetThresholdReached', payload: { serviceId: String(slo.serviceId), sloId: slo.id, sloVersion: slo.version, remainingBudget: result.remainingBudget } });
+  if (transition) publishAutomationHint({ workspaceId, actorId: automationActorId, entityId: slo.id, type: transition === 'breached' ? 'slo.breached' : 'slo.recovered' });
+  if (budgetThresholdReached) publishAutomationHint({ workspaceId, actorId: automationActorId, entityId: slo.id, type: 'slo.errorBudgetThresholdReached' });
   return result;
 };
 
@@ -238,7 +237,7 @@ export const processReliabilityWork = async (now = new Date(), owner = 'reliabil
     await SyntheticMonitorModel.updateOne({ _id: monitor._id, leaseOwner }, { $set: { nextRunAt: dead ? nextMonitorRunAt(now, monitor.intervalSeconds!) : retryAt, ...(dead ? {} : { retryScheduledAt: scheduledAt }) }, ...(dead ? { $unset: { retryScheduledAt: 1, leaseOwner: 1, leaseExpiresAt: 1 } } : { $unset: { leaseOwner: 1, leaseExpiresAt: 1 } }) });
   }
   if (healthTransition === 'failed') publishAutomationHint({ workspaceId: String(monitor.workspaceId), actorId: automationActorId, entityId: monitor.id, type: 'monitor.failed' });
-  if (healthTransition === 'recovered') publishRealtimeEvent({ workspaceId: String(monitor.workspaceId), actorId: automationActorId, entityId: monitor.id, type: 'monitor.recovered', payload: { monitorId: monitor.id, serviceId: String(monitor.serviceId) } });
-  if (healthTransition) publishRealtimeEvent({ workspaceId: String(monitor.workspaceId), actorId: automationActorId, entityId: monitor.id, type: 'monitor.healthChanged', payload: { monitorId: monitor.id, serviceId: String(monitor.serviceId), health: healthTransition === 'failed' ? 'failed' : 'healthy' } });
+  if (healthTransition === 'recovered') publishAutomationHint({ workspaceId: String(monitor.workspaceId), actorId: automationActorId, entityId: monitor.id, type: 'monitor.recovered' });
+  if (healthTransition) publishAutomationHint({ workspaceId: String(monitor.workspaceId), actorId: automationActorId, entityId: monitor.id, type: 'monitor.healthChanged' });
   return true;
 };
