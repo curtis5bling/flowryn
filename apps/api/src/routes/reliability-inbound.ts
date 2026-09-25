@@ -1,5 +1,6 @@
 import { signedSliBatchSchema, statusIdSchema } from '@flowryn/shared';
 import { raw, Router, type ErrorRequestHandler } from 'express';
+import mongoose from 'mongoose';
 import { z } from 'zod';
 
 import { InboundBucketModel, IntegrationModel, WebhookDeliveryModel } from '../automation/models.js';
@@ -19,13 +20,19 @@ router.post('/:workspaceId/:integrationId', raw({ type: 'application/json', limi
     if ((bucket.count ?? 0) > 30) return void response.status(429).json({ error: 'Webhook rejected' });
     const integration = await IntegrationModel.findOne({ workspaceId, _id: integrationId, status: 'active', archivedAt: null, inboundEvents: 'sli.received' }).select('+credentials');
     if (!integration?.credentials || !verifySignature(decryptSecret(integration as typeof integration & { credentials: string }), timestamp, deliveryId, request.body, signature)) return void deny();
-    try { await WebhookDeliveryModel.create({ workspaceId, integrationId, direction: 'inbound', deliveryId, eventId: deliveryId, eventType: 'sli.received', status: 'pending' }); } catch (error) { if ((error as { code?: number }).code === 11000) return void deny(); throw error; }
     const parsed = signedSliBatchSchema.safeParse(JSON.parse(request.body.toString('utf8')));
     if (!parsed.success) return void deny();
-    const result = await ingestSliBatch({ workspaceId, source: 'webhook', sourceId: integrationId, batch: { samples: parsed.data.samples } });
-    await WebhookDeliveryModel.updateOne({ workspaceId, integrationId, direction: 'inbound', deliveryId, status: 'pending' }, { $set: { status: 'succeeded', statusCode: 202, cleanupAt: new Date(Date.now() + 90 * 86400_000) } });
+    const session = await mongoose.startSession();
+    let result: Awaited<ReturnType<typeof ingestSliBatch>> | undefined;
+    try {
+      await session.withTransaction(async () => {
+        await WebhookDeliveryModel.create([{ workspaceId, integrationId, direction: 'inbound', deliveryId, eventId: deliveryId, eventType: 'sli.received', status: 'pending' }], { session });
+        result = await ingestSliBatch({ workspaceId, source: 'webhook', sourceId: integrationId, batch: { samples: parsed.data.samples }, session });
+        await WebhookDeliveryModel.updateOne({ workspaceId, integrationId, direction: 'inbound', deliveryId, status: 'pending' }, { $set: { status: 'succeeded', statusCode: 202, cleanupAt: new Date(Date.now() + 90 * 86400_000) } }, { session });
+      });
+    } finally { await session.endSession(); }
     response.status(202).json(result);
-  } catch { await WebhookDeliveryModel.updateOne({ workspaceId, integrationId, direction: 'inbound', deliveryId, status: 'pending' }, { $set: { status: 'failed', statusCode: 400, cleanupAt: new Date(Date.now() + 90 * 86400_000) } }); deny(); }
+  } catch { deny(); }
 });
 const errors: ErrorRequestHandler = (_error, _request, response, next) => { void next; response.status(400).json({ error: 'Webhook rejected' }); };
 router.use(errors);

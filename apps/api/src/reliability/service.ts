@@ -91,12 +91,19 @@ export const calculateEvaluation = async (workspaceId: string, slo: InstanceType
   return { workspaceId, serviceId: slo.serviceId, sloId: slo._id, objectiveKey: slo.objectiveKey, sloVersion: slo.version, windowStart, windowEnd: now, shortWindowStart, longWindowStart, burnWindows, state, good, total, compliance, remainingBudget: consumption === null ? null : Math.max(0, 1 - consumption), consumption, shortBurnRate, longBurnRate, breaching: state === 'breaching' || thresholdBreached };
 };
 export const storeEvaluation = async (workspaceId: string, slo: InstanceType<typeof ServiceLevelObjectiveModel>, now = new Date()) => {
+  now = new Date(Math.floor(now.getTime() / 60000) * 60000);
   const result = await calculateEvaluation(workspaceId, slo, now);
   let transition: 'breached' | 'recovered' | undefined;
   let budgetThresholdReached = false;
   const session = await mongoose.startSession();
   try { await session.withTransaction(async () => {
     transition = undefined; budgetThresholdReached = false;
+    const active = await ServiceLevelObjectiveModel.updateOne(
+      { workspaceId, _id: slo._id, objectiveKey: slo.objectiveKey, version: slo.version, enabled: true, archivedAt: null, $or: [{ lastEvaluationAt: null }, { lastEvaluationAt: { $lt: now } }] },
+      { $set: { lastEvaluationAt: now } },
+      { session },
+    );
+    if (!active.modifiedCount) return;
     const previous = await SloEvaluationModel.findOne({ workspaceId, objectiveKey: slo.objectiveKey, windowEnd: { $lte: now } }).sort({ windowEnd: -1 }).session(session);
     if (previous?.breaching && (result.state !== 'healthy' || result.burnWindows.some((window) => !window.recovered))) result.breaching = true;
     const stored = await SloEvaluationModel.updateOne({ sloId: slo._id, sloVersion: slo.version, windowEnd: now }, { $setOnInsert: { ...result, ...(result.breaching && !previous?.breaching ? { breachedAt: now } : {}), ...(!result.breaching && previous?.breaching ? { recoveredAt: now } : {}) } }, { upsert: true, session });
@@ -206,6 +213,11 @@ export const processReliabilityWork = async (now = new Date(), owner = 'reliabil
       });
     } finally { await session.endSession(); }
   } catch {
+    const stillOwned = await SyntheticMonitorModel.exists({ _id: monitor._id, configVersion: monitor.configVersion, leaseOwner });
+    if (!stillOwned) {
+      await SyntheticMonitorRunModel.updateOne({ _id: run._id, status: 'running', leaseOwner }, { $set: { status: 'completed', errorCode: 'MONITOR_CONFIGURATION_CHANGED', completedAt: new Date() }, $unset: { leaseOwner: 1, leaseExpiresAt: 1, nextAttemptAt: 1 } });
+      return true;
+    }
     const dead = (run.attemptCount ?? 1) >= 5; const retryAt = new Date(now.getTime() + Math.min(3600_000, 30_000 * 2 ** Math.max(0, (run.attemptCount ?? 1) - 1)) + Number.parseInt(key.slice(0, 4), 16) % 5000);
     await SyntheticMonitorRunModel.updateOne({ _id: run._id, status: 'running', leaseOwner }, { $set: { status: dead ? 'deadLetter' : 'retrying', errorCode: 'MONITOR_INFRASTRUCTURE_FAILURE', ...(dead ? { completedAt: new Date() } : { nextAttemptAt: retryAt }) }, $unset: { leaseOwner: 1, leaseExpiresAt: 1 } });
     await SyntheticMonitorModel.updateOne({ _id: monitor._id, leaseOwner }, { $set: { health: 'unknown', nextRunAt: dead ? nextMonitorRunAt(now, monitor.intervalSeconds!) : retryAt, ...(dead ? {} : { retryScheduledAt: scheduledAt }) }, ...(dead ? { $unset: { retryScheduledAt: 1, leaseOwner: 1, leaseExpiresAt: 1 } } : { $unset: { leaseOwner: 1, leaseExpiresAt: 1 } }) });
