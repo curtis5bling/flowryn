@@ -5,7 +5,7 @@ import { listMembers } from '../api';
 import { createDependency, createMonitor, createService, createSlo, getEvaluation, getMonitorHistory, getReliabilityMetrics, listDependencies, listMonitors, listServiceRelationships, listServices, listSlos, updateMonitor, updateService } from '../reliability-api';
 
 function SloRow({ workspaceId, slo }: { workspaceId: string; slo: { _id: string; name: string; objectiveTarget: number; rollingWindowDays: number } }) {
-  const evaluation = useQuery({ queryKey: ['slo-evaluation', slo._id], queryFn: () => getEvaluation(workspaceId, slo._id) });
+  const evaluation = useQuery({ queryKey: ['slo-evaluation', slo._id], queryFn: () => getEvaluation(workspaceId, slo._id), refetchInterval: 15_000 });
   const value = evaluation.data?.evaluation;
   return <li><strong>{slo.name}</strong><span>{slo.objectiveTarget}% over {slo.rollingWindowDays} days</span><span>{evaluation.isLoading ? 'Calculating…' : evaluation.isError ? 'Unavailable' : value?.state === 'unknown' ? 'Unknown — insufficient data' : `${value?.state}: ${((value?.compliance ?? 0) * 100).toFixed(3)}%; ${((value?.remainingBudget ?? 0) * 100).toFixed(1)}% budget remaining`}</span></li>;
 }
@@ -20,14 +20,14 @@ export function ReliabilityApp({ workspaceId, role }: { workspaceId: string; rol
   const [monitorUrl, setMonitorUrl] = useState('https://'); const [monitorEnabled, setMonitorEnabled] = useState(false);
   const [secretHeader, setSecretHeader] = useState('authorization'); const [secretValue, setSecretValue] = useState('');
   const services = useQuery({ queryKey: ['reliability-services', workspaceId, servicePage], queryFn: () => listServices(workspaceId, servicePage) });
-  const slos = useQuery({ queryKey: ['reliability-slos', workspaceId], queryFn: () => listSlos(workspaceId) });
+  const slos = useQuery({ queryKey: ['reliability-slos', workspaceId], queryFn: () => listSlos(workspaceId), refetchInterval: 15_000 });
   const dependencies = useQuery({ queryKey: ['reliability-dependencies', workspaceId], queryFn: () => listDependencies(workspaceId) });
-  const monitors = useQuery({ queryKey: ['reliability-monitors', workspaceId, monitorPage], queryFn: () => listMonitors(workspaceId, monitorPage) });
-  const metrics = useQuery({ queryKey: ['reliability-metrics', workspaceId], queryFn: () => getReliabilityMetrics(workspaceId) });
+  const monitors = useQuery({ queryKey: ['reliability-monitors', workspaceId, monitorPage], queryFn: () => listMonitors(workspaceId, monitorPage), refetchInterval: 15_000 });
+  const metrics = useQuery({ queryKey: ['reliability-metrics', workspaceId], queryFn: () => getReliabilityMetrics(workspaceId), refetchInterval: 15_000 });
   const members = useQuery({ queryKey: ['members', workspaceId], queryFn: () => listMembers(workspaceId) });
   const ownerId = members.data?.members[0]?.user._id;
   const relationships = useQuery({ queryKey: ['reliability-relationships', workspaceId, selected], queryFn: () => listServiceRelationships(workspaceId, selected), enabled: !!selected });
-  const monitorHistory = useQuery({ queryKey: ['reliability-monitor-history', workspaceId, selectedMonitor], queryFn: () => getMonitorHistory(workspaceId, selectedMonitor), enabled: !!selectedMonitor });
+  const monitorHistory = useQuery({ queryKey: ['reliability-monitor-history', workspaceId, selectedMonitor], queryFn: () => getMonitorHistory(workspaceId, selectedMonitor), enabled: !!selectedMonitor, refetchInterval: 15_000 });
   const refresh = () => Promise.all(['services', 'slos', 'dependencies', 'monitors', 'metrics'].map((key) => client.invalidateQueries({ queryKey: [`reliability-${key}`, workspaceId] })));
   const addService = useMutation({ mutationFn: () => createService(workspaceId, { name, slug, description: '', lifecycle: 'active', criticality: 'tier2', ownerIds: [ownerId], projectIds: [], labels: {}, links: [] }), onSuccess: async () => { setName(''); setSlug(''); await refresh(); } });
   const addSlo = useMutation({ mutationFn: () => createSlo(workspaceId, { serviceId: selected, name: sloName, description: 'Successful requests', enabled: true, indicatorType: 'availability', objectiveTarget: sloTarget, rollingWindowDays: sloWindow, dataSource: { type: 'api' }, missingDataPolicy: 'unknown', burnRateAlerts: [] }), onSuccess: refresh });
