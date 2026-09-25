@@ -25,7 +25,7 @@ sloSchema.index({ workspaceId: 1, objectiveKey: 1, version: 1 }, { unique: true 
 sloSchema.index({ enabled: 1, archivedAt: 1, nextEvaluationAt: 1, evaluationLeaseExpiresAt: 1 });
 export const ServiceLevelObjectiveModel = model('ServiceLevelObjective', sloSchema);
 
-const sampleSchema = new Schema({ workspaceId: objectId, serviceId: objectId, sloId: objectId, sloVersion: Number, bucketAt: Date, timestamp: Date, good: Number, total: Number, latencyMs: [Number], source: String, sourceId: String, idempotencyKey: String, metadata: Schema.Types.Mixed, expiresAt: Date }, { timestamps: true });
+const sampleSchema = new Schema({ workspaceId: objectId, serviceId: objectId, sloId: objectId, sloVersion: Number, bucketAt: Date, timestamp: Date, good: Number, total: Number, latencyMs: [Number], endpointHealthy: Boolean, source: String, sourceId: String, idempotencyKey: String, metadata: Schema.Types.Mixed, expiresAt: Date }, { timestamps: true });
 sampleSchema.index({ workspaceId: 1, idempotencyKey: 1 }, { unique: true });
 sampleSchema.index({ workspaceId: 1, sloId: 1, timestamp: 1 });
 sampleSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
