@@ -77,11 +77,11 @@ export const calculateEvaluation = async (workspaceId: string, slo: InstanceType
   const aggregate = async (start: Date) => {
     const match = { workspaceId: slo.workspaceId, sloId: slo._id, sloVersion: slo.version, source: source.type, ...(source.sourceId ? { sourceId: source.sourceId } : {}), timestamp: { $gte: start, $lte: now } };
     if (slo.indicatorType !== 'latency') return (await SliSampleModel.aggregate([{ $match: match }, { $group: { _id: null, good: { $sum: '$good' }, total: { $sum: '$total' } } }]))[0] ?? { good: 0, total: 0 };
-    const rows = await SliSampleModel.aggregate([{ $match: match }, { $unwind: '$latencyMs' }, { $sort: { latencyMs: 1 } }, { $limit: 100000 }, { $group: { _id: null, values: { $push: '$latencyMs' } } }]);
-    const values = (rows[0]?.values ?? []) as number[];
-    if (!values.length) return { good: 0, total: 0 };
-    const rank = Math.min(values.length - 1, Math.ceil((slo.percentile! / 100) * values.length) - 1);
-    return { good: values[rank]! <= slo.latencyThresholdMs! ? values.length : 0, total: values.length };
+    const rows = await SliSampleModel.aggregate([{ $match: match }, { $unwind: '$latencyMs' }, { $group: { _id: null, percentile: { $percentile: { input: '$latencyMs', p: [slo.percentile! / 100], method: 'approximate' } }, total: { $sum: 1 }, failedSamples: { $sum: { $cond: [{ $eq: ['$good', 0] }, 1, 0] } } } } as never]);
+    const row = rows[0] as { percentile?: number[]; total?: number; failedSamples?: number } | undefined;
+    const total = row?.total ?? 0;
+    if (!total) return { good: 0, total: 0 };
+    return { good: !row?.failedSamples && row?.percentile?.[0] !== undefined && row.percentile[0] <= slo.latencyThresholdMs! ? total : 0, total };
   };
   const configuredRules = [...(slo.burnRateAlerts ?? [])].sort((a, b) => (a.shortWindowMinutes ?? 0) - (b.shortWindowMinutes ?? 0) || (a.longWindowMinutes ?? 0) - (b.longWindowMinutes ?? 0)) as Array<{ shortWindowMinutes: number; longWindowMinutes: number; threshold: number; recoveryThreshold?: number; escalationPolicyId?: unknown }>;
   const configured = configuredRules[0];
