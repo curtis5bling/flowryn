@@ -77,11 +77,11 @@ export const calculateEvaluation = async (workspaceId: string, slo: InstanceType
   const aggregate = async (start: Date) => {
     const match = { workspaceId: slo.workspaceId, sloId: slo._id, sloVersion: slo.version, source: source.type, ...(source.sourceId ? { sourceId: source.sourceId } : {}), timestamp: { $gte: start, $lte: now } };
     if (slo.indicatorType !== 'latency') return (await SliSampleModel.aggregate([{ $match: match }, { $group: { _id: null, good: { $sum: '$good' }, total: { $sum: '$total' } } }]))[0] ?? { good: 0, total: 0 };
-    const rows = await SliSampleModel.aggregate([{ $match: match }, { $unwind: '$latencyMs' }, { $group: { _id: null, percentile: { $percentile: { input: '$latencyMs', p: [slo.percentile! / 100], method: 'approximate' } }, total: { $sum: 1 }, endpointFailures: { $sum: { $cond: [{ $eq: ['$endpointHealthy', false] }, 1, 0] } } } } as never]);
-    const row = rows[0] as { percentile?: number[]; total?: number; endpointFailures?: number } | undefined;
+    const rows = await SliSampleModel.aggregate([{ $match: match }, { $unwind: '$latencyMs' }, { $group: { _id: null, percentile: { $percentile: { input: '$latencyMs', p: [slo.percentile! / 100], method: 'approximate' } }, total: { $sum: 1 }, good: { $sum: { $cond: [{ $and: [{ $ne: ['$endpointHealthy', false] }, { $lte: ['$latencyMs', slo.latencyThresholdMs!] }] }, 1, 0] } } } } as never]);
+    const row = rows[0] as { percentile?: number[]; total?: number; good?: number } | undefined;
     const total = row?.total ?? 0;
     if (!total) return { good: 0, total: 0 };
-    return { good: !row?.endpointFailures && row?.percentile?.[0] !== undefined && row.percentile[0] <= slo.latencyThresholdMs! ? total : 0, total };
+    return { good: row?.good ?? 0, total, percentileBreaching: row?.percentile?.[0] === undefined || row.percentile[0] > slo.latencyThresholdMs! };
   };
   const configuredRules = [...(slo.burnRateAlerts ?? [])].sort((a, b) => (a.shortWindowMinutes ?? 0) - (b.shortWindowMinutes ?? 0) || (a.longWindowMinutes ?? 0) - (b.longWindowMinutes ?? 0)) as Array<{ shortWindowMinutes: number; longWindowMinutes: number; threshold: number; recoveryThreshold?: number; escalationPolicyId?: unknown }>;
   const configured = configuredRules[0];
@@ -92,7 +92,7 @@ export const calculateEvaluation = async (workspaceId: string, slo: InstanceType
   const { good = 0, total = 0 } = samples;
   const compliance = total ? good / total : null; const target = slo.objectiveTarget! / 100; const allowed = 1 - target;
   const consumption = total && allowed > 0 ? (1 - compliance!) / allowed : null;
-  const state = total ? (compliance! >= target ? 'healthy' : 'breaching') : slo.missingDataPolicy === 'bad' ? 'breaching' : 'unknown';
+  const state = total ? (slo.indicatorType === 'latency' ? (samples.percentileBreaching ? 'breaching' : 'healthy') : compliance! >= target ? 'healthy' : 'breaching') : slo.missingDataPolicy === 'bad' ? 'breaching' : 'unknown';
   const burn = (sample: { good: number; total: number }) => sample.total && allowed > 0 ? (1 - sample.good / sample.total) / allowed : null;
   const burnWindows = configuredRules.map((rule, index) => { const shortRate = burn(windowSamples[index * 2]!); const longRate = burn(windowSamples[index * 2 + 1]!); const recoveryThreshold = rule.recoveryThreshold ?? rule.threshold * 0.5; return { shortWindowMinutes: rule.shortWindowMinutes, longWindowMinutes: rule.longWindowMinutes, threshold: rule.threshold, recoveryThreshold, escalationPolicyId: rule.escalationPolicyId, shortBurnRate: shortRate, longBurnRate: longRate, breached: shortRate !== null && longRate !== null && shortRate >= rule.threshold && longRate >= rule.threshold, recovered: shortRate !== null && longRate !== null && shortRate < recoveryThreshold && longRate < recoveryThreshold }; });
   const shortBurnRate = burn(short); const longBurnRate = burn(long); const thresholdBreached = burnWindows.some((window) => window.breached);
@@ -113,12 +113,14 @@ export const storeEvaluation = async (workspaceId: string, slo: InstanceType<typ
     );
     if (!active.modifiedCount) return;
     const previous = await SloEvaluationModel.findOne({ workspaceId, objectiveKey: slo.objectiveKey, windowEnd: { $lte: now } }).sort({ windowEnd: -1 }).session(session);
-    if (previous?.breaching && (result.state !== 'healthy' || result.burnWindows.some((window) => !window.recovered))) result.breaching = true;
-    const stored = await SloEvaluationModel.updateOne({ sloId: slo._id, sloVersion: slo.version, windowEnd: now }, { $setOnInsert: { ...result, ...(result.breaching && !previous?.breaching ? { breachedAt: now } : {}), ...(!result.breaching && previous?.breaching ? { recoveredAt: now } : {}) } }, { upsert: true, session });
+    const activeAlert = await AlertModel.exists({ workspaceId, fingerprint: `slo:${slo.objectiveKey}`, status: { $ne: 'resolved' } }).session(session);
+    const previouslyBreaching = Boolean(previous?.breaching && activeAlert);
+    if (previouslyBreaching && (result.state !== 'healthy' || result.burnWindows.some((window) => !window.recovered))) result.breaching = true;
+    const stored = await SloEvaluationModel.updateOne({ sloId: slo._id, sloVersion: slo.version, windowEnd: now }, { $setOnInsert: { ...result, ...(result.breaching && !previouslyBreaching ? { breachedAt: now } : {}), ...(!result.breaching && previouslyBreaching ? { recoveredAt: now } : {}) } }, { upsert: true, session });
     if (!stored.upsertedCount) return;
     const context: AutomationContext = { principal: automationPrincipal, configuredBy: String(slo.updatedBy), correlationId: `slo:${slo.objectiveKey}`, causationId: `evaluation:${slo.id}:${now.toISOString()}`, chainDepth: 0, rulePath: [] };
     const payload = { actorId: automationActorId, serviceId: String(slo.serviceId), sloId: slo.id, sloVersion: slo.version, windowStart: result.windowStart.toISOString(), windowEnd: now.toISOString(), ...(result.longBurnRate === null ? {} : { burnRate: result.longBurnRate }), ...(result.remainingBudget === null ? {} : { remainingBudget: result.remainingBudget }) };
-    if (result.breaching && !previous?.breaching) {
+    if (result.breaching && !previouslyBreaching) {
       transition = 'breached';
       const rule = result.burnWindows.find((window) => window.breached) ?? result.burnWindows[0];
       const hash = createHash('sha256').update(`slo-breach:${slo.objectiveKey}:${slo.version}:${now.toISOString()}`).digest('hex');
@@ -129,7 +131,7 @@ export const storeEvaluation = async (workspaceId: string, slo: InstanceType<typ
       if (resolved) { const selected = await selectPolicy(workspaceId, fields, now, session); resolved.status = 'open'; resolved.cycle += 1; resolved.resolvedAt = undefined; resolved.resolvedBy = undefined; resolved.acknowledgedAt = undefined; resolved.acknowledgedBy = undefined; await resolved.save({ session }); await startEscalation(resolved, selected.policy, session, now, context); }
       await createAlert({ workspaceId, actorId: automationActorId, session, automation: context, fields });
       await emitDomainEvent(session, { workspaceId, eventType: 'slo.breached', aggregateType: 'slo', aggregateId: slo.id, payload, context });
-    } else if (!result.breaching && previous?.breaching) {
+    } else if (!result.breaching && previouslyBreaching) {
       transition = 'recovered';
       const alert = await AlertModel.findOne({ workspaceId, fingerprint: `slo:${slo.objectiveKey}`, status: { $ne: 'resolved' } }).session(session);
       if (alert) { alert.status = 'resolved'; alert.resolvedAt = now; alert.resolvedBy = new mongoose.Types.ObjectId(automationActorId); await alert.save({ session }); await cancelEscalations(workspaceId, alert.id, session); }
