@@ -50,7 +50,8 @@ export const relayAutomationHint = async (hint: AutomationHint) => {
   if (
     !hint.type.startsWith('automation.') &&
     !hint.type.startsWith('integration.') &&
-    hint.type !== 'escalation.deliveryFailed'
+    hint.type !== 'escalation.deliveryFailed' &&
+    hint.type !== 'monitor.failed'
   ) {
     const audience = audiences[hint.type];
     if (
