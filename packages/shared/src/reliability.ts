@@ -25,6 +25,7 @@ export const sloInputSchema = z.object({
 }).superRefine((value, context) => {
   if (value.dataSource.type === 'api' && value.dataSource.sourceId) context.addIssue({ code: 'custom', message: 'API objectives do not accept a source ID' });
   if (value.dataSource.type !== 'api' && !value.dataSource.sourceId) context.addIssue({ code: 'custom', message: 'External sources require a source ID' });
+  if (value.indicatorType === 'latency' && value.dataSource.type === 'automation') context.addIssue({ code: 'custom', message: 'Automation objectives accept count indicators only' });
   if (value.indicatorType === 'latency' && (!value.latencyThresholdMs || !value.percentile)) context.addIssue({ code: 'custom', message: 'Latency threshold and percentile required' });
   if (value.indicatorType !== 'latency' && (value.latencyThresholdMs || value.percentile)) context.addIssue({ code: 'custom', message: 'Latency fields apply only to latency objectives' });
 });
