@@ -236,7 +236,7 @@ export const integrationInputSchema = z
     status: z.enum(['active', 'disabled']),
     endpoint: z.string().url().max(2048).optional(),
     inboundEvents: z.array(z.enum(['alert.received', 'sli.received'])).max(2),
-    outboundEvents: z.array(automationTriggerSchema).max(15),
+    outboundEvents: z.array(automationTriggerSchema).max(automationTriggerSchema.options.length),
   })
   .strict();
 export type IntegrationInput = z.infer<typeof integrationInputSchema>;

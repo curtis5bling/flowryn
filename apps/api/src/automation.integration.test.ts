@@ -501,11 +501,12 @@ describe('SLO evaluation and alert concurrency', () => {
       { workspaceId: f.workspace.id, name: 'API', slug: 'api', lifecycle: 'active', criticality: 'tier1', ownerIds: [f.owner.id], projectIds: [], labels: {}, links: [], createdBy: f.owner.id, updatedBy: f.owner.id, archivedAt: null },
       { workspaceId: f.workspace.id, name: 'Database', slug: 'database', lifecycle: 'retired', criticality: 'tier1', ownerIds: [f.owner.id], projectIds: [], labels: {}, links: [], createdBy: f.owner.id, updatedBy: f.owner.id, archivedAt: now },
     ]);
-    const [resolved, open, overlap, foreign] = await IncidentModel.create([
+    const [resolved, open, overlap, foreign, resolvedAfterCutoff] = await IncidentModel.create([
       { workspaceId: f.workspace.id, incidentNumber: 'INC-100001', title: 'Resolved', severity: 'sev2', declaredBy: f.owner.id, declaredAt: new Date(now.getTime() - 1800_000), createdAt: new Date(now.getTime() - 1800_000), resolvedAt: new Date(now.getTime() - 1200_000) },
       { workspaceId: f.workspace.id, incidentNumber: 'INC-100002', title: 'Open', severity: 'sev3', declaredBy: f.owner.id, declaredAt: new Date(now.getTime() - 900_000), createdAt: new Date(now.getTime() - 900_000) },
       { workspaceId: f.workspace.id, incidentNumber: 'INC-100003', title: 'Overlap', severity: 'sev2', declaredBy: f.owner.id, declaredAt: new Date(now.getTime() - 600_000), createdAt: new Date(now.getTime() - 600_000), resolvedAt: new Date(now.getTime() - 300_000) },
       { workspaceId: f.other.id, incidentNumber: 'INC-200001', title: 'Foreign', severity: 'sev1', declaredBy: f.outsider.id, declaredAt: new Date(now.getTime() - 600_000), createdAt: new Date(now.getTime() - 600_000), resolvedAt: now },
+      { workspaceId: f.workspace.id, incidentNumber: 'INC-100004', title: 'Resolved after cutoff', severity: 'sev3', declaredBy: f.owner.id, declaredAt: new Date(now.getTime() - 100_000), createdAt: new Date(now.getTime() - 100_000), resolvedAt: new Date(now.getTime() + 10_000) },
     ]);
     await ServiceRelationshipModel.create([
       { workspaceId: f.workspace.id, serviceId: api!._id, targetType: 'incident', targetId: resolved!._id, createdBy: f.owner.id, archivedAt: null },
@@ -513,12 +514,13 @@ describe('SLO evaluation and alert concurrency', () => {
       { workspaceId: f.workspace.id, serviceId: api!._id, targetType: 'incident', targetId: overlap!._id, createdBy: f.owner.id, archivedAt: null },
       { workspaceId: f.workspace.id, serviceId: database!._id, targetType: 'incident', targetId: overlap!._id, createdBy: f.owner.id, archivedAt: null },
       { workspaceId: f.other.id, serviceId: new mongoose.Types.ObjectId(), targetType: 'incident', targetId: foreign!._id, createdBy: f.outsider.id, archivedAt: null },
+      { workspaceId: f.workspace.id, serviceId: api!._id, targetType: 'incident', targetId: resolvedAfterCutoff!._id, createdBy: f.owner.id, archivedAt: null },
     ]);
     await ServiceRelationshipModel.updateMany({ workspaceId: f.workspace.id, serviceId: database!._id }, { $set: { archivedAt: now } });
     await AlertModel.create([{ workspaceId: f.workspace.id, fingerprint: 'metrics:api:1', title: 'API alert', severity: 'sev2', status: 'open', occurrenceCount: 1, firstReceivedAt: now, lastReceivedAt: now, serviceId: api!.id, correlationId: randomUUID(), createdBy: f.owner.id }, { workspaceId: f.workspace.id, fingerprint: 'metrics:db:1', title: 'DB alert', severity: 'sev2', status: 'resolved', occurrenceCount: 1, firstReceivedAt: now, lastReceivedAt: now, serviceId: database!.id, correlationId: randomUUID(), createdBy: f.owner.id }, { workspaceId: f.other.id, fingerprint: 'metrics:foreign:1', title: 'Foreign', severity: 'sev1', status: 'open', occurrenceCount: 1, firstReceivedAt: now, lastReceivedAt: now, serviceId: api!.id, correlationId: randomUUID(), createdBy: f.outsider.id }]);
     const result = await request(app).get(`/api/workspaces/${f.workspace.id}/reliability/metrics`).query({ from: from.toISOString(), to: new Date(now.getTime() + 1000).toISOString() }).set('Cookie', await f.cookie()).expect(200);
     expect(result.body.alertsByService).toEqual(expect.arrayContaining([{ _id: api!.id, count: 1 }, { _id: database!.id, count: 1 }]));
-    expect(result.body.incidentsByService).toEqual(expect.arrayContaining([{ serviceId: api!.id, count: 3, meanResolutionMs: 450_000 }, { serviceId: database!.id, count: 1, meanResolutionMs: 300_000 }]));
+    expect(result.body.incidentsByService).toEqual(expect.arrayContaining([{ serviceId: api!.id, count: 4, meanResolutionMs: 450_000 }, { serviceId: database!.id, count: 1, meanResolutionMs: 300_000 }]));
     expect(JSON.stringify(result.body)).not.toContain(foreign!.id);
   });
 

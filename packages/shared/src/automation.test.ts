@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { automationRuleSchema, type AutomationCondition } from './automation.js';
+import { automationRuleSchema, automationTriggerSchema, integrationInputSchema, type AutomationCondition } from './automation.js';
 
 const rule = {
   name: 'Rule',
@@ -14,6 +14,9 @@ const rule = {
   ],
 };
 describe('bounded automation contracts', () => {
+  it('allows an integration to subscribe to every supported outbound event', () => {
+    expect(integrationInputSchema.safeParse({ name: 'All events', type: 'genericWebhook', status: 'active', inboundEvents: [], outboundEvents: automationTriggerSchema.options }).success).toBe(true);
+  });
   it('accepts a versioned structured rule', () =>
     expect(automationRuleSchema.safeParse(rule).success).toBe(true));
   it('rejects code, queries, unknown fields, versions, duplicated IDs and oversized actions', () => {
