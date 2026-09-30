@@ -216,6 +216,20 @@ describe('durable reliability monitor execution', () => {
     expect(archived!.retryScheduledAt).toBeUndefined();
   });
 
+  it('atomically invalidates recoverable executions when monitor configuration changes', async () => {
+    const x = await monitorFixture();
+    const run = await SyntheticMonitorRunModel.create({ workspaceId: x.f.workspace.id, serviceId: x.service._id, monitorId: x.monitor._id, scheduledAt: x.due, idempotencyKey: 'configuration:retrying', status: 'retrying', attemptCount: 2, nextAttemptAt: new Date(x.due.getTime() + 30_000), leaseOwner: 'retry-worker', leaseExpiresAt: new Date(x.due.getTime() + 10_000) });
+    await SyntheticMonitorModel.updateOne({ _id: x.monitor._id }, { $set: { retryScheduledAt: x.due, leaseOwner: 'retry-worker', leaseExpiresAt: new Date(x.due.getTime() + 10_000) } });
+
+    const response = await request(app).patch(`/api/workspaces/${x.f.workspace.id}/reliability/monitors/${x.monitor.id}`).set('Cookie', await x.f.cookie()).send({ enabled: false });
+    expect(response.status).toBe(200);
+    expect(await SyntheticMonitorRunModel.findById(run._id)).toMatchObject({ status: 'completed', errorCode: 'MONITOR_CONFIGURATION_CHANGED' });
+    const monitor = await SyntheticMonitorModel.findById(x.monitor._id);
+    expect(monitor).toMatchObject({ enabled: false });
+    expect(monitor!.leaseOwner).toBeUndefined();
+    expect(monitor!.retryScheduledAt).toBeUndefined();
+  });
+
   it('terminalizes recoverable monitor executions when their service is archived', async () => {
     const x = await monitorFixture();
     const run = await SyntheticMonitorRunModel.create({ workspaceId: x.f.workspace.id, serviceId: x.service._id, monitorId: x.monitor._id, scheduledAt: x.due, idempotencyKey: 'service-archive:running', status: 'running', attemptCount: 1, leaseOwner: 'crashed-worker', leaseExpiresAt: new Date(x.due.getTime() - 1) });
