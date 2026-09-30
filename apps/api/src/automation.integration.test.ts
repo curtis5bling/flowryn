@@ -201,6 +201,21 @@ describe('durable reliability monitor execution', () => {
     expect(await SyntheticMonitorRunModel.findById(run._id)).toMatchObject({ idempotencyKey: key, status: 'completed', endpointHealthy: true });
   });
 
+  it('terminalizes recoverable executions when a monitor is archived', async () => {
+    const x = await monitorFixture();
+    const run = await SyntheticMonitorRunModel.create({ workspaceId: x.f.workspace.id, serviceId: x.service._id, monitorId: x.monitor._id, scheduledAt: x.due, idempotencyKey: 'archive:retrying', status: 'retrying', attemptCount: 2, nextAttemptAt: new Date(x.due.getTime() + 30_000), leaseOwner: 'retry-worker', leaseExpiresAt: new Date(x.due.getTime() + 10_000) });
+    await SyntheticMonitorModel.updateOne({ _id: x.monitor._id }, { $set: { retryScheduledAt: x.due, leaseOwner: 'retry-worker', leaseExpiresAt: new Date(x.due.getTime() + 10_000) } });
+
+    await request(app).delete(`/api/workspaces/${x.f.workspace.id}/reliability/monitors/${x.monitor.id}`).set('Cookie', await x.f.cookie()).expect(204);
+
+    expect(await SyntheticMonitorRunModel.findById(run._id)).toMatchObject({ status: 'completed', errorCode: 'MONITOR_CONFIGURATION_CHANGED' });
+    const archived = await SyntheticMonitorModel.findById(x.monitor._id);
+    expect(archived).toMatchObject({ enabled: false });
+    expect(archived!.archivedAt).toBeTruthy();
+    expect(archived!.leaseOwner).toBeUndefined();
+    expect(archived!.retryScheduledAt).toBeUndefined();
+  });
+
   it('does not execute disabled, archived, or service-archived monitors', async () => {
     for (const state of ['disabled', 'archived', 'service-archived'] as const) {
       const x = await monitorFixture();
@@ -449,6 +464,7 @@ describe('SLO evaluation and alert concurrency', () => {
       { workspaceId: f.workspace.id, serviceId: database!._id, targetType: 'incident', targetId: overlap!._id, createdBy: f.owner.id, archivedAt: null },
       { workspaceId: f.other.id, serviceId: new mongoose.Types.ObjectId(), targetType: 'incident', targetId: foreign!._id, createdBy: f.outsider.id, archivedAt: null },
     ]);
+    await ServiceRelationshipModel.updateMany({ workspaceId: f.workspace.id, serviceId: database!._id }, { $set: { archivedAt: now } });
     await AlertModel.create([{ workspaceId: f.workspace.id, fingerprint: 'metrics:api:1', title: 'API alert', severity: 'sev2', status: 'open', occurrenceCount: 1, firstReceivedAt: now, lastReceivedAt: now, serviceId: api!.id, correlationId: randomUUID(), createdBy: f.owner.id }, { workspaceId: f.workspace.id, fingerprint: 'metrics:db:1', title: 'DB alert', severity: 'sev2', status: 'resolved', occurrenceCount: 1, firstReceivedAt: now, lastReceivedAt: now, serviceId: database!.id, correlationId: randomUUID(), createdBy: f.owner.id }, { workspaceId: f.other.id, fingerprint: 'metrics:foreign:1', title: 'Foreign', severity: 'sev1', status: 'open', occurrenceCount: 1, firstReceivedAt: now, lastReceivedAt: now, serviceId: api!.id, correlationId: randomUUID(), createdBy: f.outsider.id }]);
     const result = await request(app).get(`/api/workspaces/${f.workspace.id}/reliability/metrics`).query({ from: from.toISOString(), to: new Date(now.getTime() + 1000).toISOString() }).set('Cookie', await f.cookie()).expect(200);
     expect(result.body.alertsByService).toEqual(expect.arrayContaining([{ _id: api!.id, count: 1 }, { _id: database!.id, count: 1 }]));
