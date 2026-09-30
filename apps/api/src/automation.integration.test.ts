@@ -183,6 +183,24 @@ describe('durable reliability monitor execution', () => {
     expect(await SyntheticMonitorRunModel.findById(retry!._id)).toMatchObject({ status: 'completed', attemptCount: 2, endpointHealthy: true });
   });
 
+  it('preserves an expired execution when a manual test is requested', async () => {
+    const x = await monitorFixture();
+    const expiredAt = new Date(x.due.getTime() - 1);
+    const key = createHash('sha256').update(`${x.monitor.id}:${x.due.toISOString()}`).digest('hex');
+    const run = await SyntheticMonitorRunModel.create({ workspaceId: x.f.workspace.id, serviceId: x.service._id, monitorId: x.monitor._id, scheduledAt: x.due, idempotencyKey: key, status: 'running', attemptCount: 1, startedAt: expiredAt, leaseOwner: 'crashed-worker', leaseExpiresAt: expiredAt });
+    await SyntheticMonitorModel.updateOne({ _id: x.monitor._id }, { $set: { leaseOwner: 'crashed-worker', leaseExpiresAt: expiredAt } });
+
+    const response = await request(app).post(`/api/workspaces/${x.f.workspace.id}/reliability/monitors/${x.monitor.id}/test`).set('Cookie', await x.f.cookie()).send({});
+    expect(response.status).toBe(409);
+    expect((await SyntheticMonitorModel.findById(x.monitor._id))!.nextRunAt).toEqual(x.due);
+
+    let calls = 0;
+    expect(await processReliabilityWork(x.due, 'recovery-worker', async () => { calls += 1; return { statusCode: 200, latencyMs: 4, body: 'ok' }; })).toBe(true);
+    expect(calls).toBe(1);
+    expect(await SyntheticMonitorRunModel.countDocuments({ monitorId: x.monitor._id })).toBe(1);
+    expect(await SyntheticMonitorRunModel.findById(run._id)).toMatchObject({ idempotencyKey: key, status: 'completed', endpointHealthy: true });
+  });
+
   it('does not execute disabled, archived, or service-archived monitors', async () => {
     for (const state of ['disabled', 'archived', 'service-archived'] as const) {
       const x = await monitorFixture();
