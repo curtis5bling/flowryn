@@ -55,20 +55,32 @@ export const ingestSliBatch = async (input: { workspaceId: string; source: 'api'
   const now = input.now ?? new Date();
   const samples = input.batch.samples.map((sample) => ({ ...sample, serviceId: sample.serviceId.toLowerCase(), sloId: sample.sloId.toLowerCase() }));
   const sloIds = [...new Set(samples.map((sample) => sample.sloId))];
-  const slos = await ServiceLevelObjectiveModel.find({ workspaceId: input.workspaceId, _id: { $in: sloIds }, enabled: true, archivedAt: null }).limit(101).session(input.session ?? null);
-  if (slos.length !== sloIds.length) throw new IncidentError(400, 'Active workspace SLOs required');
-  const byId = new Map(slos.map((slo) => [slo.id, slo]));
-  const operations = samples.map((sample) => {
-    const timestamp = new Date(sample.timestamp); const slo = byId.get(sample.sloId)!; const source = slo.dataSource as { type: string; sourceId?: string };
-    if (timestamp.getTime() > now.getTime() + 300_000 || timestamp.getTime() < now.getTime() - 7 * 86400_000) throw new IncidentError(400, 'Sample timestamp outside ingestion window');
-    if (String(slo.serviceId) !== sample.serviceId || source.type !== input.source || (source.sourceId && source.sourceId !== input.sourceId)) throw new IncidentError(400, 'SLO source is not eligible');
-    const observations = sample.latencyMs ?? []; const total = slo.indicatorType === 'latency' ? observations.length : sample.total!; const good = slo.indicatorType === 'latency' ? observations.filter((value) => value <= slo.latencyThresholdMs!).length : sample.good!;
-    if (slo.indicatorType === 'latency' && !observations.length) throw new IncidentError(400, 'Latency observations required');
-    if (slo.indicatorType !== 'latency' && sample.good === undefined) throw new IncidentError(400, 'Good and total counts required');
-    return { updateOne: { filter: { workspaceId: input.workspaceId, idempotencyKey: sample.idempotencyKey }, update: { $setOnInsert: { ...sample, good, total, workspaceId: input.workspaceId, timestamp, bucketAt: new Date(Math.floor(timestamp.getTime() / 300000) * 300000), sloVersion: slo.version, source: input.source, ...(input.sourceId ? { sourceId: input.sourceId } : {}), expiresAt: new Date(now.getTime() + 400 * 86400_000) } }, upsert: true } };
-  });
-  const result = await SliSampleModel.bulkWrite(operations as Parameters<typeof SliSampleModel.bulkWrite>[0], { ordered: false, ...(input.session ? { session: input.session } : {}) });
-  return { accepted: result.upsertedCount, duplicates: samples.length - result.upsertedCount };
+  const ingest = async (session: ClientSession) => {
+    const slos = await ServiceLevelObjectiveModel.find({ workspaceId: input.workspaceId, _id: { $in: sloIds }, enabled: true, archivedAt: null }).limit(101).session(session);
+    if (slos.length !== sloIds.length) throw new IncidentError(400, 'Active workspace SLOs required');
+    const byId = new Map(slos.map((slo) => [slo.id, slo]));
+    const operations = samples.map((sample) => {
+      const timestamp = new Date(sample.timestamp); const slo = byId.get(sample.sloId)!; const source = slo.dataSource as { type: string; sourceId?: string };
+      if (timestamp.getTime() > now.getTime() + 300_000 || timestamp.getTime() < now.getTime() - 7 * 86400_000) throw new IncidentError(400, 'Sample timestamp outside ingestion window');
+      if (String(slo.serviceId) !== sample.serviceId || source.type !== input.source || (source.sourceId && source.sourceId !== input.sourceId)) throw new IncidentError(400, 'SLO source is not eligible');
+      const observations = sample.latencyMs ?? []; const total = slo.indicatorType === 'latency' ? observations.length : sample.total!; const good = slo.indicatorType === 'latency' ? observations.filter((value) => value <= slo.latencyThresholdMs!).length : sample.good!;
+      if (slo.indicatorType === 'latency' && !observations.length) throw new IncidentError(400, 'Latency observations required');
+      if (slo.indicatorType !== 'latency' && sample.good === undefined) throw new IncidentError(400, 'Good and total counts required');
+      return { updateOne: { filter: { workspaceId: input.workspaceId, idempotencyKey: sample.idempotencyKey }, update: { $setOnInsert: { ...sample, good, total, workspaceId: input.workspaceId, timestamp, bucketAt: new Date(Math.floor(timestamp.getTime() / 300000) * 300000), sloVersion: slo.version, source: input.source, ...(input.sourceId ? { sourceId: input.sourceId } : {}), expiresAt: new Date(now.getTime() + 400 * 86400_000) } }, upsert: true } };
+    });
+    for (const slo of slos) {
+      const fenced = await ServiceLevelObjectiveModel.updateOne({ workspaceId: input.workspaceId, _id: slo._id, version: slo.version, enabled: true, archivedAt: null }, { $inc: { ingestionRevision: 1 } }, { session });
+      if (!fenced.modifiedCount) throw new IncidentError(409, 'SLO changed during ingestion');
+    }
+    const result = await SliSampleModel.bulkWrite(operations as Parameters<typeof SliSampleModel.bulkWrite>[0], { ordered: false, session });
+    return { accepted: result.upsertedCount, duplicates: samples.length - result.upsertedCount };
+  };
+  if (input.session) return ingest(input.session);
+  const session = await mongoose.startSession(); let result: Awaited<ReturnType<typeof ingest>> | undefined;
+  try { await session.withTransaction(async () => { result = await ingest(session); }); }
+  finally { await session.endSession(); }
+  if (!result) throw new IncidentError(500, 'SLI ingestion failed');
+  return result;
 };
 export const calculateEvaluation = async (workspaceId: string, slo: InstanceType<typeof ServiceLevelObjectiveModel>, now = new Date()) => {
   const windowStart = new Date(now.getTime() - slo.rollingWindowDays! * 86400_000);

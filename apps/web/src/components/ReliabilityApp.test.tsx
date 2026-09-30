@@ -26,7 +26,7 @@ describe('ReliabilityApp workflows', () => {
   afterEach(cleanup);
   beforeEach(() => { vi.clearAllMocks(); Object.defineProperty(navigator, 'onLine', { configurable: true, value: true }); });
   it('renders catalog, relationships, dependency table, unknown budgets, and failure history accessibly', async () => {
-    renderApp();
+    const { client } = renderApp(); const invalidate = vi.spyOn(client, 'invalidateQueries');
     expect(await screen.findByRole('cell', { name: 'API' })).toBeTruthy();
     fireEvent.change(screen.getByLabelText('Selected service'), { target: { value: 'service-1' } });
     expect(await screen.findByText('incident: incident-1')).toBeTruthy();
@@ -38,6 +38,8 @@ describe('ReliabilityApp workflows', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save objective' }));
     await waitFor(() => expect(api.updateSlo).toHaveBeenCalledWith('workspace-1', 'slo-1', { objectiveTarget: 99.95 }));
     expect(screen.getByRole('cell', { name: 'required' })).toBeTruthy();
+    vi.spyOn(window, 'confirm').mockReturnValueOnce(true); fireEvent.click(screen.getByRole('button', { name: 'Add dependency' }));
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ['reliability-impact', 'workspace-1'] }));
     fireEvent.click(screen.getByRole('button', { name: 'HTTPS health' }));
     expect(await screen.findByText(/completed, failed/)).toBeTruthy();
     fireEvent.click(await screen.findByRole('button', { name: 'Retry failed run' }));

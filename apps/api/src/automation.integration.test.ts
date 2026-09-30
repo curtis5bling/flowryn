@@ -48,7 +48,7 @@ import { WorkspaceModel } from './models/Workspace.js';
 import { WorkspaceMemberModel } from './models/WorkspaceMember.js';
 import { AlertModel, EscalationModel, PolicyModel } from './oncall/models.js';
 import { ServiceLevelObjectiveModel, ServiceModel, ServiceRelationshipModel, SliSampleModel, SloEvaluationModel, SyntheticMonitorModel, SyntheticMonitorRunModel } from './reliability/models.js';
-import { calculateEvaluation, processReliabilityWork, storeEvaluation } from './reliability/service.js';
+import { calculateEvaluation, ingestSliBatch, processReliabilityWork, storeEvaluation } from './reliability/service.js';
 
 const app = createApp();
 let mongo: MongoMemoryReplSet;
@@ -126,6 +126,20 @@ describe('signed reliability ingestion integration', () => {
     expect(await SliSampleModel.countDocuments({ sloId: archiveFirst.slo._id })).toBe(0);
     await storeEvaluation(archiveFirst.f.workspace.id, archiveFirst.slo, new Date());
     expect(await SloEvaluationModel.countDocuments({ sloId: archiveFirst.slo._id })).toBe(0);
+  });
+
+  it('write-fences an active SLO until concurrent ingestion commits', async () => {
+    const x = await reliabilityFixture(); const now = new Date();
+    let entered!: () => void; const atWrite = new Promise<void>((resolve) => { entered = resolve; });
+    let release!: () => void; const continueWrite = new Promise<void>((resolve) => { release = resolve; });
+    const original = SliSampleModel.bulkWrite.bind(SliSampleModel);
+    vi.spyOn(SliSampleModel, 'bulkWrite').mockImplementationOnce(async (operations, options) => { entered(); await continueWrite; return original(operations, options); });
+    const ingestion = ingestSliBatch({ workspaceId: x.f.workspace.id, source: 'webhook', sourceId: x.integration.body.integration.id, now, batch: { samples: [{ serviceId: x.service.id, sloId: x.slo.id, timestamp: now.toISOString(), good: 1, total: 1, idempotencyKey: 'archive-race:fenced', metadata: {} }] } });
+    await atWrite;
+    const archival = request(app).delete(`/api/workspaces/${x.f.workspace.id}/reliability/slos/${x.slo.id}`).set('Cookie', await x.f.cookie());
+    release(); await ingestion; await archival.expect(204);
+    expect(await SliSampleModel.countDocuments({ sloId: x.slo._id, idempotencyKey: 'archive-race:fenced' })).toBe(1);
+    expect((await ServiceLevelObjectiveModel.findById(x.slo._id))!.ingestionRevision).toBe(1);
   });
 });
 
