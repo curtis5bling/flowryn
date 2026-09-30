@@ -232,6 +232,10 @@ export const processReliabilityWork = async (now = new Date(), owner = 'reliabil
         const fenced = await SyntheticMonitorModel.findOne({ _id: fresh._id, enabled: true, archivedAt: null, configVersion: fresh.configVersion, leaseOwner, leaseExpiresAt: { $gt: now } }).session(session);
         if (!fenced) throw new Error('LEASE_LOST');
         const slo = fenced.sloId ? await ServiceLevelObjectiveModel.findOne({ workspaceId: fenced.workspaceId, _id: fenced.sloId, serviceId: fenced.serviceId, enabled: true, archivedAt: null, 'dataSource.type': 'synthetic', $or: [{ 'dataSource.sourceId': { $exists: false } }, { 'dataSource.sourceId': String(fenced._id) }] }).session(session) : null;
+        if (slo) {
+          const sloFence = await ServiceLevelObjectiveModel.updateOne({ workspaceId: fenced.workspaceId, _id: slo._id, version: slo.version, enabled: true, archivedAt: null }, { $inc: { ingestionRevision: 1 } }, { session });
+          if (!sloFence.modifiedCount) throw new Error('SLO_CONFIGURATION_CHANGED');
+        }
         const completed = await SyntheticMonitorRunModel.updateOne({ _id: run._id, status: 'running', leaseOwner }, { $set: { status: 'completed', endpointHealthy: healthy, statusCode: result.statusCode || null, latencyMs: result.latencyMs, errorCode: endpointError ? 'ENDPOINT_UNREACHABLE' : null, completedAt: now }, $unset: { leaseOwner: 1, leaseExpiresAt: 1, nextAttemptAt: 1 } }, { session });
         if (!completed.modifiedCount) throw new Error('LEASE_LOST');
         const observationGood = healthy && (!slo || slo.indicatorType !== 'latency' || result.latencyMs <= slo.latencyThresholdMs!);

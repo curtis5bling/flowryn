@@ -270,6 +270,22 @@ describe('durable reliability monitor execution', () => {
     const archived = await monitorFixture(); await SyntheticMonitorModel.updateOne({ _id: archived.monitor._id }, { $set: { enabled: false, archivedAt: archived.due } }); let calls = 0;
     expect(await processReliabilityWork(archived.due, 'archive-first', async () => { calls += 1; return { statusCode: 200, latencyMs: 1, body: '' }; })).toBe(false); expect(calls).toBe(0);
   });
+
+  it('write-fences a synthetic SLO while its monitor observation commits', async () => {
+    const x = await monitorFixture();
+    const slo = await ServiceLevelObjectiveModel.create({ workspaceId: x.f.workspace.id, serviceId: x.service._id, objectiveKey: randomUUID(), name: 'Synthetic availability', enabled: true, indicatorType: 'availability', objectiveTarget: 99, rollingWindowDays: 7, dataSource: { type: 'synthetic', sourceId: x.monitor.id }, missingDataPolicy: 'unknown', burnRateAlerts: [], version: 1, createdBy: x.f.owner.id, updatedBy: x.f.owner.id, archivedAt: null });
+    await SyntheticMonitorModel.updateOne({ _id: x.monitor._id }, { $set: { sloId: slo._id } });
+    let entered!: () => void; const atSample = new Promise<void>((resolve) => { entered = resolve; });
+    let release!: () => void; const continueSample = new Promise<void>((resolve) => { release = resolve; });
+    const original = SliSampleModel.updateOne.bind(SliSampleModel);
+    vi.spyOn(SliSampleModel, 'updateOne').mockImplementationOnce((...args) => { entered(); const query = original(...args); const execute = query.exec.bind(query); query.exec = async () => { await continueSample; return execute(); }; return query; });
+    const worker = processReliabilityWork(x.due, 'synthetic-slo-race', async () => ({ statusCode: 200, latencyMs: 1, body: 'ok' }));
+    await atSample;
+    const archival = request(app).delete(`/api/workspaces/${x.f.workspace.id}/reliability/slos/${slo.id}`).set('Cookie', await x.f.cookie());
+    release(); expect(await worker).toBe(true); await archival.expect(204);
+    expect(await SliSampleModel.countDocuments({ sloId: slo._id })).toBe(1);
+    expect((await ServiceLevelObjectiveModel.findById(slo._id))!.ingestionRevision).toBe(1);
+  });
 });
 
 describe('reliability authorization and archival boundaries', () => {
