@@ -189,7 +189,8 @@ router.patch(`${base}/monitors/:monitorId`, async (req, res) => {
       const monitor = await SyntheticMonitorModel.findOne({ ...scope(req), _id: req.params.monitorId, archivedAt: null }).select('+secretCiphertext +secretKeyVersion').session(session);
       assertIncident(monitor, 404, 'Monitor not found');
       const input = parse(monitorInputSchema, { ...monitorContract(monitor), ...req.body }); assertSafeMonitorUrl(input.url);
-      assertIncident(await ServiceModel.exists({ ...scope(req), _id: input.serviceId, archivedAt: null }).session(session), 400, 'Workspace service required');
+      const destinationFence = await ServiceModel.updateOne({ ...scope(req), _id: input.serviceId, archivedAt: null }, { $inc: { version: 1 } }, { session });
+      assertIncident(destinationFence.matchedCount, 400, 'Workspace service required');
       if (input.enabled && input.sloId) { const slo = await ServiceLevelObjectiveModel.findOne({ ...scope(req), _id: input.sloId, serviceId: input.serviceId, archivedAt: null, enabled: true, 'dataSource.type': 'synthetic' }).session(session); assertIncident(slo && (!slo.dataSource?.sourceId || slo.dataSource.sourceId === monitor.id), 400, 'Compatible synthetic SLO required'); }
       const secretHeaders = input.secretHeaders; delete input.secretHeaders;
       const changes: Record<string, unknown> = { ...input, updatedBy: actor(req), ...(input.enabled ? { nextRunAt: changedAt } : {}), ...(!monitor.enabled && input.enabled ? { health: 'unknown', failureCount: 0 } : {}) };
