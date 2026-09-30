@@ -216,6 +216,21 @@ describe('durable reliability monitor execution', () => {
     expect(archived!.retryScheduledAt).toBeUndefined();
   });
 
+  it('terminalizes recoverable monitor executions when their service is archived', async () => {
+    const x = await monitorFixture();
+    const run = await SyntheticMonitorRunModel.create({ workspaceId: x.f.workspace.id, serviceId: x.service._id, monitorId: x.monitor._id, scheduledAt: x.due, idempotencyKey: 'service-archive:running', status: 'running', attemptCount: 1, leaseOwner: 'crashed-worker', leaseExpiresAt: new Date(x.due.getTime() - 1) });
+    await SyntheticMonitorModel.updateOne({ _id: x.monitor._id }, { $set: { retryScheduledAt: x.due, leaseOwner: 'crashed-worker', leaseExpiresAt: new Date(x.due.getTime() - 1) } });
+
+    await request(app).delete(`/api/workspaces/${x.f.workspace.id}/reliability/services/${x.service.id}`).set('Cookie', await x.f.cookie()).expect(204);
+
+    expect(await SyntheticMonitorRunModel.findById(run._id)).toMatchObject({ status: 'completed', errorCode: 'SERVICE_ARCHIVED' });
+    const monitor = await SyntheticMonitorModel.findById(x.monitor._id);
+    expect(monitor).toMatchObject({ enabled: false });
+    expect(monitor!.archivedAt).toBeTruthy();
+    expect(monitor!.leaseOwner).toBeUndefined();
+    expect(monitor!.retryScheduledAt).toBeUndefined();
+  });
+
   it('does not execute disabled, archived, or service-archived monitors', async () => {
     for (const state of ['disabled', 'archived', 'service-archived'] as const) {
       const x = await monitorFixture();
@@ -384,6 +399,10 @@ describe('SLO evaluation and alert concurrency', () => {
     expect(result).toMatchObject({ state: 'breaching', good: 90, total: 100, compliance: 0.9, remainingBudget: 0, breaching: true });
     expect(result.consumption).toBeCloseTo(10); expect(result.shortBurnRate).toBeCloseTo(10); expect(result.longBurnRate).toBeCloseTo(10);
     expect(result.windowEnd).toEqual(now);
+    await SliSampleModel.deleteMany({ sloId: slo._id });
+    slo.burnRateAlerts = [{ shortWindowMinutes: 5, longWindowMinutes: 60, threshold: 2, recoveryThreshold: 0 }];
+    await SliSampleModel.create({ workspaceId: f.workspace.id, serviceId: service._id, sloId: slo._id, sloVersion: 1, timestamp: new Date(now.getTime() - 60_000), bucketAt: new Date(now.getTime() - 300_000), good: 100, total: 100, source: 'api', idempotencyKey: 'evaluation:zero-recovery', metadata: {}, expiresAt: new Date(now.getTime() + 86400_000) });
+    expect((await calculateEvaluation(f.workspace.id, slo, now)).burnWindows[0]).toMatchObject({ recoveryThreshold: 0, shortBurnRate: 0, longBurnRate: 0, recovered: true });
   });
 
   it('deduplicates concurrent evaluation snapshots, alerts, and transition outbox events', async () => {

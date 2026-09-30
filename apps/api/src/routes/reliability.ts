@@ -60,10 +60,14 @@ const archiveService = async (workspaceId: string, serviceId: string, actorId: s
       assertIncident(service, 404, 'Service not found');
       const slos = await ServiceLevelObjectiveModel.find({ workspaceId, serviceId, archivedAt: null }).select('objectiveKey').session(session);
       const alerts = await AlertModel.find({ workspaceId, fingerprint: { $in: slos.map((slo) => `slo:${slo.objectiveKey}`) }, status: { $ne: 'resolved' } }).session(session);
+      const monitors = await SyntheticMonitorModel.find({ workspaceId, serviceId, archivedAt: null }).select('_id').session(session);
+      const monitorIds = monitors.map((monitor) => monitor._id);
+      const archivedAt = new Date();
       for (const alert of alerts) { alert.status = 'resolved'; alert.resolvedAt = new Date(); alert.resolvedBy = new mongoose.Types.ObjectId(actorId); await alert.save({ session }); await cancelEscalations(workspaceId, alert.id, session); }
       await Promise.all([
-        ServiceLevelObjectiveModel.updateMany({ workspaceId, serviceId, archivedAt: null }, { $set: { enabled: false, archivedAt: new Date(), updatedBy: actorId } }, { session }),
-        SyntheticMonitorModel.updateMany({ workspaceId, serviceId, archivedAt: null }, { $set: { enabled: false, archivedAt: new Date(), updatedBy: actorId }, $push: { monitoringTransitions: { enabled: false, at: new Date() } }, $unset: { leaseOwner: 1, leaseExpiresAt: 1 } }, { session }),
+        ServiceLevelObjectiveModel.updateMany({ workspaceId, serviceId, archivedAt: null }, { $set: { enabled: false, archivedAt, updatedBy: actorId } }, { session }),
+        SyntheticMonitorModel.updateMany({ workspaceId, serviceId, archivedAt: null }, { $set: { enabled: false, archivedAt, updatedBy: actorId }, $inc: { configVersion: 1 }, $push: { monitoringTransitions: { enabled: false, at: archivedAt } }, $unset: { retryScheduledAt: 1, leaseOwner: 1, leaseExpiresAt: 1 } }, { session }),
+        SyntheticMonitorRunModel.updateMany({ workspaceId, monitorId: { $in: monitorIds }, status: { $in: ['running', 'retrying'] } }, { $set: { status: 'completed', errorCode: 'SERVICE_ARCHIVED', completedAt: archivedAt }, $unset: { leaseOwner: 1, leaseExpiresAt: 1, nextAttemptAt: 1 } }, { session }),
         ServiceDependencyModel.updateMany({ workspaceId, $or: [{ upstreamServiceId: serviceId }, { downstreamServiceId: serviceId }], archivedAt: null }, { $set: { enabled: false, archivedAt: new Date() } }, { session }),
         ServiceRelationshipModel.updateMany({ workspaceId, serviceId, archivedAt: null }, { $set: { archivedAt: new Date() } }, { session }),
       ]);
