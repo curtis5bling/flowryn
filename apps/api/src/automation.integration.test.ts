@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import {
   automationRuleSchema,
@@ -46,6 +46,9 @@ import { TaskModel } from './models/Task.js';
 import { UserModel } from './models/User.js';
 import { WorkspaceModel } from './models/Workspace.js';
 import { WorkspaceMemberModel } from './models/WorkspaceMember.js';
+import { AlertModel, EscalationModel, PolicyModel } from './oncall/models.js';
+import { ServiceLevelObjectiveModel, ServiceModel, ServiceRelationshipModel, SliSampleModel, SloEvaluationModel, SyntheticMonitorModel, SyntheticMonitorRunModel } from './reliability/models.js';
+import { calculateEvaluation, processReliabilityWork, storeEvaluation } from './reliability/service.js';
 
 const app = createApp();
 let mongo: MongoMemoryReplSet;
@@ -59,6 +62,351 @@ beforeAll(async () => {
 beforeEach(async () => {
   for (const collection of Object.values(mongoose.connection.collections))
     await collection.deleteMany({});
+});
+
+describe('signed reliability ingestion integration', () => {
+  const reliabilityFixture = async () => {
+    const f = await fixture();
+    const integration = await request(app)
+      .post(`${f.base}/integrations`)
+      .set('Cookie', await f.cookie())
+      .send({ name: 'SLI input', type: 'genericWebhook', status: 'active', inboundEvents: ['sli.received'], outboundEvents: [] });
+    expect(integration.status).toBe(201);
+    const service = await ServiceModel.create({ workspaceId: f.workspace.id, name: 'API', slug: 'api', description: '', lifecycle: 'active', criticality: 'tier1', ownerIds: [f.owner.id], projectIds: [], labels: {}, links: [], createdBy: f.owner.id, updatedBy: f.owner.id, archivedAt: null });
+    const slo = await ServiceLevelObjectiveModel.create({ workspaceId: f.workspace.id, serviceId: service._id, objectiveKey: randomUUID(), name: 'Availability', description: '', enabled: true, indicatorType: 'availability', objectiveTarget: 99.9, rollingWindowDays: 30, dataSource: { type: 'webhook', sourceId: integration.body.integration.id }, missingDataPolicy: 'unknown', burnRateAlerts: [], version: 1, createdBy: f.owner.id, updatedBy: f.owner.id, archivedAt: null });
+    return { f, integration, service, slo };
+  };
+  const signedRequest = (input: Awaited<ReturnType<typeof reliabilityFixture>>, body: string, deliveryId = randomUUID(), timestamp = String(Math.floor(Date.now() / 1000)), workspaceId = input.f.workspace.id, signature = signBody(input.integration.body.secret, timestamp, deliveryId, body)) => request(app).post(`/api/webhooks/reliability/${workspaceId}/${input.integration.body.integration.id}`).set('content-type', 'application/json').set('x-flowryn-timestamp', timestamp).set('x-flowryn-delivery-id', deliveryId).set('x-flowryn-signature', signature).send(body);
+
+  it('authenticates raw bytes and rejects replay, invalid signatures, time skew, malformed data, and cross-workspace use', async () => {
+    const x = await reliabilityFixture();
+    const body = JSON.stringify({ schemaVersion: 1, eventType: 'sli.received', samples: [{ serviceId: x.service.id, sloId: x.slo.id, timestamp: new Date().toISOString(), good: 9, total: 10, idempotencyKey: 'signed:sample:1', metadata: { region: 'test' } }] });
+    const deliveryId = randomUUID();
+    expect((await signedRequest(x, body, deliveryId, undefined, undefined, '00'.repeat(32))).status).toBe(401);
+    expect((await signedRequest(x, body, randomUUID(), String(Math.floor(Date.now() / 1000) - 600))).status).toBe(401);
+    expect((await signedRequest(x, body, randomUUID(), String(Math.floor(Date.now() / 1000) + 600))).status).toBe(401);
+    expect((await signedRequest(x, body, randomUUID(), undefined, x.f.other.id)).status).toBe(401);
+    expect((await signedRequest(x, '{bad')).status).toBe(401);
+    expect((await signedRequest(x, body, deliveryId)).status).toBe(202);
+    expect((await signedRequest(x, body, deliveryId)).status).toBe(401);
+    expect(await SliSampleModel.countDocuments({ workspaceId: x.f.workspace.id })).toBe(1);
+  });
+
+  it('is concurrency-safe for sample idempotency and rejects late, future, oversized-batch, and high-cardinality samples', async () => {
+    const x = await reliabilityFixture();
+    const sample = { serviceId: x.service.id, sloId: x.slo.id, timestamp: new Date().toISOString(), good: 1, total: 1, idempotencyKey: 'concurrent:sample:1', metadata: {} };
+    const body = JSON.stringify({ schemaVersion: 1, eventType: 'sli.received', samples: [sample] });
+    const results = await Promise.all([signedRequest(x, body), signedRequest(x, body)]);
+    expect(results.map((result) => result.status).sort()).toEqual([202, 202]);
+    expect(await SliSampleModel.countDocuments({ workspaceId: x.f.workspace.id, idempotencyKey: sample.idempotencyKey })).toBe(1);
+    for (const timestamp of [new Date(Date.now() + 6 * 60_000), new Date(Date.now() - 8 * 86400_000)]) {
+      const invalid = JSON.stringify({ schemaVersion: 1, eventType: 'sli.received', samples: [{ ...sample, timestamp: timestamp.toISOString(), idempotencyKey: `invalid:${timestamp.getTime()}` }] });
+      expect((await signedRequest(x, invalid)).status).toBe(401);
+    }
+    const oversized = JSON.stringify({ schemaVersion: 1, eventType: 'sli.received', samples: Array.from({ length: 101 }, (_, index) => ({ ...sample, idempotencyKey: `batch:${index}` })) });
+    expect((await signedRequest(x, oversized)).status).toBe(401);
+    const cardinality = JSON.stringify({ schemaVersion: 1, eventType: 'sli.received', samples: [{ ...sample, idempotencyKey: 'metadata:large', metadata: Object.fromEntries(Array.from({ length: 21 }, (_, index) => [`key${index}`, 'value'])) }] });
+    expect((await signedRequest(x, cardinality)).status).toBe(401);
+  });
+
+  it('serializes SLO archival with ingestion in both orderings', async () => {
+    const ingestionFirst = await reliabilityFixture();
+    const body = JSON.stringify({ schemaVersion: 1, eventType: 'sli.received', samples: [{ serviceId: ingestionFirst.service.id, sloId: ingestionFirst.slo.id, timestamp: new Date().toISOString(), good: 1, total: 1, idempotencyKey: 'archive-order:ingest-first', metadata: {} }] });
+    await signedRequest(ingestionFirst, body).expect(202);
+    await request(app).delete(`/api/workspaces/${ingestionFirst.f.workspace.id}/reliability/slos/${ingestionFirst.slo.id}`).set('Cookie', await ingestionFirst.f.cookie()).expect(204);
+    expect(await SliSampleModel.countDocuments({ sloId: ingestionFirst.slo._id })).toBe(1);
+    expect(await storeEvaluation(ingestionFirst.f.workspace.id, ingestionFirst.slo, new Date())).toMatchObject({ sloVersion: 1 });
+    expect(await SloEvaluationModel.countDocuments({ sloId: ingestionFirst.slo._id })).toBe(0);
+
+    await Promise.all(Object.values(mongoose.connection.collections).map((collection) => collection.deleteMany({})));
+    const archiveFirst = await reliabilityFixture();
+    await request(app).delete(`/api/workspaces/${archiveFirst.f.workspace.id}/reliability/slos/${archiveFirst.slo.id}`).set('Cookie', await archiveFirst.f.cookie()).expect(204);
+    const deniedBody = JSON.stringify({ schemaVersion: 1, eventType: 'sli.received', samples: [{ serviceId: archiveFirst.service.id, sloId: archiveFirst.slo.id, timestamp: new Date().toISOString(), good: 1, total: 1, idempotencyKey: 'archive-order:archive-first', metadata: {} }] });
+    expect((await signedRequest(archiveFirst, deniedBody)).status).toBe(401);
+    expect(await SliSampleModel.countDocuments({ sloId: archiveFirst.slo._id })).toBe(0);
+    await storeEvaluation(archiveFirst.f.workspace.id, archiveFirst.slo, new Date());
+    expect(await SloEvaluationModel.countDocuments({ sloId: archiveFirst.slo._id })).toBe(0);
+  });
+});
+
+describe('durable reliability monitor execution', () => {
+  const monitorFixture = async () => {
+    const f = await fixture();
+    const service = await ServiceModel.create({ workspaceId: f.workspace.id, name: 'API', slug: 'api', lifecycle: 'active', criticality: 'tier1', ownerIds: [f.owner.id], projectIds: [], labels: {}, links: [], createdBy: f.owner.id, updatedBy: f.owner.id, archivedAt: null });
+    const due = new Date('2026-09-29T12:00:00.000Z');
+    const monitor = await SyntheticMonitorModel.create({ workspaceId: f.workspace.id, serviceId: service._id, name: 'Health', enabled: true, url: 'https://health.company.com/', method: 'GET', intervalSeconds: 60, timeoutMs: 1000, maxRedirects: 0, expectedStatusMin: 200, expectedStatusMax: 299, configVersion: 1, nextRunAt: due, createdBy: f.owner.id, updatedBy: f.owner.id, archivedAt: null });
+    return { f, service, monitor, due };
+  };
+
+  it('allows only one worker to claim a scheduled check and stores one stable execution', async () => {
+    const x = await monitorFixture();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let entered = 0;
+    const network = async () => { entered += 1; await gate; return { statusCode: 200, latencyMs: 12, body: 'ok' }; };
+    const first = processReliabilityWork(x.due, 'worker-a', network);
+    while (!entered) await new Promise((resolve) => setTimeout(resolve, 1));
+    expect(await processReliabilityWork(x.due, 'worker-b', network)).toBe(false);
+    release();
+    expect(await first).toBe(true);
+    expect(await SyntheticMonitorRunModel.countDocuments({ monitorId: x.monitor._id })).toBe(1);
+    expect((await SyntheticMonitorRunModel.findOne({ monitorId: x.monitor._id }))!.status).toBe('completed');
+  });
+
+  it('distinguishes endpoint failure from infrastructure retry and recovers expired work', async () => {
+    const endpoint = await monitorFixture();
+    await processReliabilityWork(endpoint.due, 'endpoint', async () => { throw new Error('ECONNRESET'); });
+    expect(await SyntheticMonitorRunModel.findOne({ monitorId: endpoint.monitor._id })).toMatchObject({ status: 'completed', endpointHealthy: false, errorCode: 'ENDPOINT_UNREACHABLE' });
+    await Promise.all(Object.values(mongoose.connection.collections).map((collection) => collection.deleteMany({})));
+    const infrastructure = await monitorFixture();
+    await processReliabilityWork(infrastructure.due, 'infra', async () => { throw Object.assign(new Error('lookup'), { code: 'ENOTFOUND' }); });
+    const retry = await SyntheticMonitorRunModel.findOne({ monitorId: infrastructure.monitor._id });
+    expect(retry).toMatchObject({ status: 'retrying', errorCode: 'MONITOR_INFRASTRUCTURE_FAILURE', attemptCount: 1 });
+    expect(retry!.nextAttemptAt!.getTime()).toBeGreaterThan(infrastructure.due.getTime());
+    await SyntheticMonitorModel.updateOne({ _id: infrastructure.monitor._id }, { $set: { nextRunAt: retry!.nextAttemptAt, retryScheduledAt: retry!.scheduledAt, leaseExpiresAt: new Date(infrastructure.due.getTime() - 1) }, $unset: { leaseOwner: 1 } });
+    await processReliabilityWork(retry!.nextAttemptAt!, 'recovery', async () => ({ statusCode: 200, latencyMs: 5, body: 'ok' }));
+    expect(await SyntheticMonitorRunModel.countDocuments({ monitorId: infrastructure.monitor._id })).toBe(1);
+    expect(await SyntheticMonitorRunModel.findById(retry!._id)).toMatchObject({ status: 'completed', attemptCount: 2, endpointHealthy: true });
+  });
+
+  it('does not execute disabled, archived, or service-archived monitors', async () => {
+    for (const state of ['disabled', 'archived', 'service-archived'] as const) {
+      const x = await monitorFixture();
+      if (state === 'disabled') await SyntheticMonitorModel.updateOne({ _id: x.monitor._id }, { $set: { enabled: false } });
+      if (state === 'archived') await SyntheticMonitorModel.updateOne({ _id: x.monitor._id }, { $set: { archivedAt: x.due } });
+      if (state === 'service-archived') await ServiceModel.updateOne({ _id: x.service._id }, { $set: { archivedAt: x.due } });
+      let calls = 0;
+      const result = await processReliabilityWork(x.due, state, async () => { calls += 1; return { statusCode: 200, latencyMs: 1, body: '' }; });
+      expect(calls).toBe(0);
+      expect(state === 'service-archived' ? result : !result).toBe(true);
+      await Promise.all(Object.values(mongoose.connection.collections).map((collection) => collection.deleteMany({})));
+    }
+  });
+
+  it('uses bounded deterministic retry delays, preserves identity, and dead-letters after exhaustion', async () => {
+    const x = await monitorFixture();
+    let at = x.due;
+    let runId: string | undefined; let key: string | undefined; let previousDelay = 0;
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      await processReliabilityWork(at, `retry-${attempt}`, async () => { throw Object.assign(new Error('lookup'), { code: 'ENOTFOUND' }); });
+      const run = await SyntheticMonitorRunModel.findOne({ monitorId: x.monitor._id });
+      runId ??= run!.id; key ??= run!.idempotencyKey!;
+      expect(run!.id).toBe(runId); expect(run!.idempotencyKey).toBe(key); expect(run!.attemptCount).toBe(attempt);
+      if (attempt < 5) { const delay = run!.nextAttemptAt!.getTime() - at.getTime(); expect(delay).toBeGreaterThanOrEqual(30_000 * 2 ** (attempt - 1)); expect(delay).toBeLessThan(30_000 * 2 ** (attempt - 1) + 5_000); expect(delay).toBeGreaterThan(previousDelay); previousDelay = delay; at = run!.nextAttemptAt!; }
+      else expect(run!.status).toBe('deadLetter');
+    }
+    expect(await SyntheticMonitorRunModel.countDocuments({ monitorId: x.monitor._id })).toBe(1);
+  });
+
+  it('authorizes one administrative dead-letter retry and rejects concurrent or member retries', async () => {
+    const x = await monitorFixture();
+    const run = await SyntheticMonitorRunModel.create({ workspaceId: x.f.workspace.id, serviceId: x.service._id, monitorId: x.monitor._id, scheduledAt: x.due, idempotencyKey: 'dead-letter:stable', status: 'deadLetter', attemptCount: 5, completedAt: x.due, errorCode: 'MONITOR_INFRASTRUCTURE_FAILURE' });
+    const url = `/api/workspaces/${x.f.workspace.id}/reliability/monitors/${x.monitor.id}/runs/${run.id}/retry`;
+    expect((await request(app).post(url).set('Cookie', await x.f.cookie(x.f.member)).send({})).status).toBe(403);
+    const cookie = await x.f.cookie(x.f.owner);
+    const results = await Promise.all([request(app).post(url).set('Cookie', cookie).send({}), request(app).post(url).set('Cookie', cookie).send({})]);
+    expect(results.map((result) => result.status).sort()).toEqual([202, 409]);
+    expect(await SyntheticMonitorRunModel.countDocuments({ _id: run._id, status: 'retrying' })).toBe(1);
+  });
+
+  it('fences administrative retries when disable or archive wins and rechecks before execution', async () => {
+    for (const transition of ['disable', 'archive'] as const) {
+      const x = await monitorFixture();
+      const run = await SyntheticMonitorRunModel.create({ workspaceId: x.f.workspace.id, serviceId: x.service._id, monitorId: x.monitor._id, scheduledAt: x.due, idempotencyKey: `admin-race:${transition}`, status: 'deadLetter', attemptCount: 5, completedAt: x.due, errorCode: 'MONITOR_INFRASTRUCTURE_FAILURE' });
+      const base = `/api/workspaces/${x.f.workspace.id}/reliability/monitors/${x.monitor.id}`; const cookie = await x.f.cookie();
+      if (transition === 'disable') await request(app).patch(base).set('Cookie', cookie).send({ enabled: false }).expect(200);
+      else await request(app).delete(base).set('Cookie', cookie).expect(204);
+      expect((await request(app).post(`${base}/runs/${run.id}/retry`).set('Cookie', cookie).send({})).status).toBe(409);
+      let calls = 0; expect(await processReliabilityWork(x.due, `transition-first:${transition}`, async () => { calls += 1; return { statusCode: 200, latencyMs: 1, body: '' }; })).toBe(false); expect(calls).toBe(0);
+      await Promise.all(Object.values(mongoose.connection.collections).map((collection) => collection.deleteMany({})));
+    }
+
+    const retryFirst = await monitorFixture();
+    const run = await SyntheticMonitorRunModel.create({ workspaceId: retryFirst.f.workspace.id, serviceId: retryFirst.service._id, monitorId: retryFirst.monitor._id, scheduledAt: retryFirst.due, idempotencyKey: 'admin-race:retry-first', status: 'deadLetter', attemptCount: 5, completedAt: retryFirst.due, errorCode: 'MONITOR_INFRASTRUCTURE_FAILURE' });
+    const base = `/api/workspaces/${retryFirst.f.workspace.id}/reliability/monitors/${retryFirst.monitor.id}`; const cookie = await retryFirst.f.cookie();
+    await request(app).post(`${base}/runs/${run.id}/retry`).set('Cookie', cookie).send({}).expect(202);
+    await request(app).patch(base).set('Cookie', cookie).send({ enabled: false }).expect(200);
+    let calls = 0; expect(await processReliabilityWork(new Date(), 'retry-first', async () => { calls += 1; return { statusCode: 200, latencyMs: 1, body: '' }; })).toBe(false); expect(calls).toBe(0);
+    expect(await SyntheticMonitorRunModel.countDocuments({ monitorId: retryFirst.monitor._id })).toBe(1);
+    expect(await OutboxEventModel.countDocuments({ 'payload.monitorId': retryFirst.monitor.id })).toBe(0);
+  });
+
+  it('keeps one stable execution when dead-letter retry races a worker claim and a lease expires', async () => {
+    const x = await monitorFixture();
+    const stableKey = createHash('sha256').update(`${x.monitor.id}:${x.due.toISOString()}`).digest('hex');
+    const run = await SyntheticMonitorRunModel.create({ workspaceId: x.f.workspace.id, serviceId: x.service._id, monitorId: x.monitor._id, scheduledAt: x.due, idempotencyKey: stableKey, status: 'deadLetter', attemptCount: 5, completedAt: x.due, errorCode: 'MONITOR_INFRASTRUCTURE_FAILURE', leaseExpiresAt: new Date(x.due.getTime() - 1) });
+    let calls = 0; const network = async () => { calls += 1; return { statusCode: 200, latencyMs: 5, body: 'ok' }; };
+    const retry = request(app).post(`/api/workspaces/${x.f.workspace.id}/reliability/monitors/${x.monitor.id}/runs/${run.id}/retry`).set('Cookie', await x.f.cookie()).send({});
+    const [, response] = await Promise.all([processReliabilityWork(x.due, 'racing-worker', network), retry]);
+    expect([202, 409]).toContain(response.status);
+    const retried = await SyntheticMonitorRunModel.findById(run._id); expect(retried!.idempotencyKey).toBe(stableKey);
+    if (retried!.status === 'retrying') await processReliabilityWork(retried!.nextAttemptAt!, 'retry-worker', network);
+    expect(calls).toBeLessThanOrEqual(1); expect(await SyntheticMonitorRunModel.countDocuments({ monitorId: x.monitor._id })).toBe(1);
+    expect(await OutboxEventModel.countDocuments({ 'payload.monitorId': x.monitor.id })).toBeLessThanOrEqual(1);
+    expect(await AlertModel.countDocuments({ serviceId: x.service.id })).toBe(0);
+  });
+  it('rechecks archival after a claimed check and never starts work when archival wins', async () => {
+    const claimed = await monitorFixture(); let release!: () => void; const gate = new Promise<void>((resolve) => { release = resolve; });
+    let signalEntered!: () => void; const enteredNetwork = new Promise<void>((resolve) => { signalEntered = resolve; });
+    const running = processReliabilityWork(claimed.due, 'archive-race', async () => { signalEntered(); await gate; return { statusCode: 200, latencyMs: 1, body: 'ok' }; });
+    const reachedNetwork = await Promise.race([enteredNetwork.then(() => true), running.then(() => false)]); expect(reachedNetwork).toBe(true);
+    await SyntheticMonitorModel.updateOne({ _id: claimed.monitor._id }, { $set: { enabled: false, archivedAt: claimed.due }, $inc: { configVersion: 1 }, $unset: { leaseOwner: 1, leaseExpiresAt: 1 } }); release(); await running;
+    expect(await SyntheticMonitorRunModel.findOne({ monitorId: claimed.monitor._id })).toMatchObject({ status: 'completed', errorCode: 'MONITOR_CONFIGURATION_CHANGED' });
+    await Promise.all(Object.values(mongoose.connection.collections).map((collection) => collection.deleteMany({})));
+    const archived = await monitorFixture(); await SyntheticMonitorModel.updateOne({ _id: archived.monitor._id }, { $set: { enabled: false, archivedAt: archived.due } }); let calls = 0;
+    expect(await processReliabilityWork(archived.due, 'archive-first', async () => { calls += 1; return { statusCode: 200, latencyMs: 1, body: '' }; })).toBe(false); expect(calls).toBe(0);
+  });
+});
+
+describe('reliability authorization and archival boundaries', () => {
+  const serviceBody = (ownerId: string, slug = 'api') => ({ name: 'API', slug, description: '', lifecycle: 'active', criticality: 'tier1', ownerIds: [ownerId], projectIds: [], labels: {}, links: [] });
+  it('enforces owner/admin/member/suspended boundaries and denies cross-workspace histories and relationships', async () => {
+    const f = await fixture(); const base = `/api/workspaces/${f.workspace.id}/reliability`;
+    expect((await request(app).post(`${base}/services`).set('Cookie', await f.cookie(f.member)).send(serviceBody(f.owner.id))).status).toBe(403);
+    const created = await request(app).post(`${base}/services`).set('Cookie', await f.cookie(f.admin)).send(serviceBody(f.owner.id)).expect(201); const serviceId = created.body.service._id as string;
+    const slo = await request(app).post(`${base}/slos`).set('Cookie', await f.cookie()).send({ serviceId, name: 'Availability', description: '', enabled: true, indicatorType: 'availability', objectiveTarget: 99, rollingWindowDays: 7, dataSource: { type: 'api' }, missingDataPolicy: 'unknown', burnRateAlerts: [] }).expect(201);
+    expect((await request(app).get(`${base}/services`).set('Cookie', await f.cookie(f.member))).status).toBe(200);
+    const suspendedCookie = await f.cookie(f.owner); await UserModel.updateOne({ _id: f.owner._id }, { $set: { status: 'suspended' } });
+    expect((await request(app).patch(`${base}/services/${serviceId}`).set('Cookie', suspendedCookie).send({ name: 'Denied' })).status).toBe(401); await UserModel.updateOne({ _id: f.owner._id }, { $set: { status: 'active' } });
+    expect((await request(app).get(`/api/workspaces/${f.other.id}/reliability/slos/${slo.body.slo._id}/history`).set('Cookie', await f.cookie(f.outsider))).status).toBe(404);
+    expect((await request(app).get(`/api/workspaces/${f.other.id}/reliability/services/${serviceId}/relationships`).set('Cookie', await f.cookie(f.outsider))).status).toBe(404);
+    await request(app).delete(`${base}/slos/${slo.body.slo._id}`).set('Cookie', await f.cookie()).expect(204);
+    expect((await request(app).patch(`${base}/slos/${slo.body.slo._id}`).set('Cookie', await f.cookie()).send({ name: 'Denied' })).status).toBe(404);
+    await request(app).delete(`${base}/services/${serviceId}`).set('Cookie', await f.cookie()).expect(204);
+    expect((await request(app).patch(`${base}/services/${serviceId}`).set('Cookie', await f.cookie()).send({ name: 'Denied' })).status).toBe(404);
+  });
+  it('rejects indirect dependency cycles and graph depth beyond the documented bound', async () => {
+    const f = await fixture(); const base = `/api/workspaces/${f.workspace.id}/reliability`; const cookie = await f.cookie();
+    const services = await ServiceModel.create(Array.from({ length: 12 }, (_, index) => ({ workspaceId: f.workspace.id, name: `Service ${index}`, slug: `service-${index}`, lifecycle: 'active', criticality: 'tier2', ownerIds: [f.owner.id], projectIds: [], labels: {}, links: [], createdBy: f.owner.id, updatedBy: f.owner.id, archivedAt: null })));
+    const edge = (upstreamServiceId: string, downstreamServiceId: string) => ({ upstreamServiceId, downstreamServiceId, type: 'runtime', criticality: 'required', description: '', enabled: true });
+    await request(app).post(`${base}/dependencies`).set('Cookie', cookie).send(edge(services[0]!.id, services[1]!.id)).expect(201);
+    await request(app).post(`${base}/dependencies`).set('Cookie', cookie).send(edge(services[1]!.id, services[2]!.id)).expect(201);
+    await request(app).post(`${base}/dependencies`).set('Cookie', cookie).send(edge(services[2]!.id, services[0]!.id)).expect(409);
+    for (let index = 2; index < 10; index++) await request(app).post(`${base}/dependencies`).set('Cookie', cookie).send(edge(services[index]!.id, services[index + 1]!.id)).expect(201);
+    await request(app).post(`${base}/dependencies`).set('Cookie', cookie).send(edge(services[10]!.id, services[11]!.id)).expect(409);
+    const impact = await request(app).get(`${base}/services/${services[0]!.id}/impact`).query({ direction: 'downstream' }).set('Cookie', cookie).expect(200);
+    expect(impact.body.edges).toHaveLength(10); expect(new Set(impact.body.serviceIds).size).toBeLessThanOrEqual(500);
+  });
+  it('serializes service archival against dependent SLO, monitor, dependency, and relationship writes', async () => {
+    const f = await fixture(); const base = `/api/workspaces/${f.workspace.id}/reliability`; const cookie = await f.cookie();
+    const [service, peer] = await ServiceModel.create([{ workspaceId: f.workspace.id, name: 'Race', slug: 'race', lifecycle: 'active', criticality: 'tier1', ownerIds: [f.owner.id], projectIds: [], labels: {}, links: [], createdBy: f.owner.id, updatedBy: f.owner.id, archivedAt: null }, { workspaceId: f.workspace.id, name: 'Peer', slug: 'peer', lifecycle: 'active', criticality: 'tier2', ownerIds: [f.owner.id], projectIds: [], labels: {}, links: [], createdBy: f.owner.id, updatedBy: f.owner.id, archivedAt: null }]);
+    let releaseStart!: () => void;
+    const start = new Promise<void>((resolve) => { releaseStart = resolve; });
+    const launch = <T>(work: () => Promise<T>) => start.then(work);
+    const operations = [
+      launch(() => request(app).post(`${base}/slos`).set('Cookie', cookie).send({ serviceId: service!.id, name: 'Race SLO', description: '', enabled: true, indicatorType: 'availability', objectiveTarget: 99, rollingWindowDays: 7, dataSource: { type: 'api' }, missingDataPolicy: 'unknown', burnRateAlerts: [] })),
+      launch(() => request(app).post(`${base}/monitors`).set('Cookie', cookie).send({ serviceId: service!.id, name: 'Race monitor', enabled: false, url: 'https://race.company.com', method: 'GET', intervalSeconds: 60, timeoutMs: 1000, maxRedirects: 0, expectedStatusMin: 200, expectedStatusMax: 299 })),
+      launch(() => request(app).post(`${base}/dependencies`).set('Cookie', cookie).send({ upstreamServiceId: service!.id, downstreamServiceId: peer!.id, type: 'runtime', criticality: 'required', description: '', enabled: true })),
+      launch(() => request(app).post(`${base}/relationships`).set('Cookie', cookie).send({ serviceId: service!.id, targetType: 'project', targetId: f.project.id })),
+      launch(() => request(app).delete(`${base}/services/${service!.id}`).set('Cookie', cookie)),
+    ]; releaseStart(); const results = await Promise.all(operations); expect(results.at(-1)!.status).toBe(204); expect(results.slice(0, 4).every((result: { status: number }) => [201, 400, 404, 409].includes(result.status))).toBe(true);
+    expect(await ServiceLevelObjectiveModel.countDocuments({ serviceId: service!._id, archivedAt: null })).toBe(0); expect(await SyntheticMonitorModel.countDocuments({ serviceId: service!._id, archivedAt: null })).toBe(0); expect(await ServiceRelationshipModel.countDocuments({ serviceId: service!._id, archivedAt: null })).toBe(0);
+    expect(await mongoose.model('ServiceDependency').countDocuments({ $or: [{ upstreamServiceId: service!._id }, { downstreamServiceId: service!._id }], archivedAt: null })).toBe(0);
+    expect((await request(app).post(`${base}/slos`).set('Cookie', cookie).send({ serviceId: service!.id, name: 'Denied SLO', description: '', enabled: true, indicatorType: 'availability', objectiveTarget: 99, rollingWindowDays: 7, dataSource: { type: 'api' }, missingDataPolicy: 'unknown', burnRateAlerts: [] })).status).not.toBe(201);
+    expect((await request(app).post(`${base}/monitors`).set('Cookie', cookie).send({ serviceId: service!.id, name: 'Denied monitor', enabled: false, url: 'https://denied.company.com', method: 'GET', intervalSeconds: 60, timeoutMs: 1000, maxRedirects: 0, expectedStatusMin: 200, expectedStatusMax: 299 })).status).not.toBe(201);
+    expect((await request(app).post(`${base}/relationships`).set('Cookie', cookie).send({ serviceId: service!.id, targetType: 'project', targetId: f.project.id })).status).not.toBe(201);
+    expect((await request(app).post(`${base}/dependencies`).set('Cookie', cookie).send({ upstreamServiceId: service!.id, downstreamServiceId: peer!.id, type: 'runtime', criticality: 'required', description: '', enabled: true })).status).not.toBe(201);
+  });
+});
+
+describe('SLO evaluation and alert concurrency', () => {
+  it('reports insufficient data distinctly and calculates deterministic compliance and burn windows', async () => {
+    const f = await fixture();
+    const service = await ServiceModel.create({ workspaceId: f.workspace.id, name: 'API', slug: 'api', lifecycle: 'active', criticality: 'tier1', ownerIds: [f.owner.id], projectIds: [], labels: {}, links: [], createdBy: f.owner.id, updatedBy: f.owner.id, archivedAt: null });
+    const slo = await ServiceLevelObjectiveModel.create({ workspaceId: f.workspace.id, serviceId: service._id, objectiveKey: randomUUID(), name: 'Availability', enabled: true, indicatorType: 'availability', objectiveTarget: 99, rollingWindowDays: 7, dataSource: { type: 'api' }, missingDataPolicy: 'unknown', burnRateAlerts: [{ shortWindowMinutes: 5, longWindowMinutes: 60, threshold: 2 }], version: 1, createdBy: f.owner.id, updatedBy: f.owner.id, archivedAt: null });
+    const now = new Date('2026-09-29T12:00:00.000Z');
+    expect(await calculateEvaluation(f.workspace.id, slo, now)).toMatchObject({ state: 'unknown', total: 0, compliance: null, remainingBudget: null });
+    await SliSampleModel.create({ workspaceId: f.workspace.id, serviceId: service._id, sloId: slo._id, sloVersion: 1, timestamp: new Date(now.getTime() - 60_000), bucketAt: new Date(now.getTime() - 300_000), good: 90, total: 100, source: 'api', idempotencyKey: 'evaluation:1', metadata: {}, expiresAt: new Date(now.getTime() + 86400_000) });
+    const result = await calculateEvaluation(f.workspace.id, slo, now);
+    expect(result).toMatchObject({ state: 'breaching', good: 90, total: 100, compliance: 0.9, remainingBudget: 0, breaching: true });
+    expect(result.consumption).toBeCloseTo(10); expect(result.shortBurnRate).toBeCloseTo(10); expect(result.longBurnRate).toBeCloseTo(10);
+    expect(result.windowEnd).toEqual(now);
+  });
+
+  it('deduplicates concurrent evaluation snapshots, alerts, and transition outbox events', async () => {
+    const f = await fixture();
+    const policy = await PolicyModel.create({ workspaceId: f.workspace.id, name: 'SLO paging', description: '', enabled: true, steps: [{ id: randomUUID(), delayMinutes: 0, target: { type: 'users', userIds: [f.member.id] }, webhookIntegrationIds: [] }], repeatCount: 0, repeatDelayMinutes: 5, version: 1, createdBy: f.owner.id, updatedBy: f.owner.id, archivedAt: null });
+    const service = await ServiceModel.create({ workspaceId: f.workspace.id, name: 'API', slug: 'api', lifecycle: 'active', criticality: 'tier1', ownerIds: [f.owner.id], projectIds: [], labels: {}, links: [], createdBy: f.owner.id, updatedBy: f.owner.id, archivedAt: null });
+    const slo = await ServiceLevelObjectiveModel.create({ workspaceId: f.workspace.id, serviceId: service._id, objectiveKey: randomUUID(), name: 'Availability', enabled: true, indicatorType: 'availability', objectiveTarget: 99, rollingWindowDays: 7, dataSource: { type: 'api' }, missingDataPolicy: 'unknown', burnRateAlerts: [{ shortWindowMinutes: 5, longWindowMinutes: 60, threshold: 2, escalationPolicyId: policy._id }], version: 1, createdBy: f.owner.id, updatedBy: f.owner.id, archivedAt: null });
+    const now = new Date('2026-09-29T12:00:00.000Z');
+    await SliSampleModel.create({ workspaceId: f.workspace.id, serviceId: service._id, sloId: slo._id, sloVersion: 1, timestamp: new Date(now.getTime() - 60_000), bucketAt: new Date(now.getTime() - 300_000), good: 0, total: 100, source: 'api', idempotencyKey: 'breach:1', metadata: {}, expiresAt: new Date(now.getTime() + 86400_000) });
+    await Promise.allSettled([storeEvaluation(f.workspace.id, slo, now), storeEvaluation(f.workspace.id, slo, now)]);
+    expect(await AlertModel.countDocuments({ workspaceId: f.workspace.id, fingerprint: `slo:${slo.objectiveKey}` })).toBe(1);
+    expect(await OutboxEventModel.countDocuments({ workspaceId: f.workspace.id, eventType: 'slo.breached' })).toBe(1);
+    expect(await OutboxEventModel.countDocuments({ workspaceId: f.workspace.id, eventType: 'slo.errorBudgetThresholdReached' })).toBe(1);
+    expect(await EscalationModel.countDocuments({ workspaceId: f.workspace.id })).toBe(1);
+  });
+
+  it('recovers only the matching alert once and does not recover from missing data', async () => {
+    const f = await fixture(); const now = new Date('2026-09-29T12:00:00.000Z');
+    const service = await ServiceModel.create({ workspaceId: f.workspace.id, name: 'API', slug: 'api', lifecycle: 'active', criticality: 'tier1', ownerIds: [f.owner.id], projectIds: [], labels: {}, links: [], createdBy: f.owner.id, updatedBy: f.owner.id, archivedAt: null });
+    const slo = await ServiceLevelObjectiveModel.create({ workspaceId: f.workspace.id, serviceId: service._id, objectiveKey: randomUUID(), name: 'Availability', enabled: true, indicatorType: 'availability', objectiveTarget: 99, rollingWindowDays: 7, dataSource: { type: 'api' }, missingDataPolicy: 'unknown', burnRateAlerts: [], version: 3, createdBy: f.owner.id, updatedBy: f.owner.id, archivedAt: null });
+    const previousWindow = new Date(now.getTime() - 60_000);
+    await SloEvaluationModel.create({ workspaceId: f.workspace.id, serviceId: service._id, sloId: slo._id, objectiveKey: slo.objectiveKey, sloVersion: 3, windowStart: new Date(previousWindow.getTime() - 7 * 86400_000), windowEnd: previousWindow, shortWindowStart: new Date(previousWindow.getTime() - 300_000), longWindowStart: new Date(previousWindow.getTime() - 3600_000), burnWindows: [], state: 'breaching', good: 0, total: 100, compliance: 0, remainingBudget: 0, consumption: 100, shortBurnRate: 100, longBurnRate: 100, breaching: true, breachedAt: previousWindow });
+    const matching = await AlertModel.create({ workspaceId: f.workspace.id, fingerprint: `slo:${slo.objectiveKey}`, title: 'Matching', severity: 'sev2', status: 'open', occurrenceCount: 1, firstReceivedAt: previousWindow, lastReceivedAt: previousWindow, serviceId: service.id, correlationId: randomUUID(), createdBy: f.owner.id });
+    const unrelated = await AlertModel.create({ workspaceId: f.workspace.id, fingerprint: 'slo:unrelated', title: 'Unrelated', severity: 'sev2', status: 'open', occurrenceCount: 1, firstReceivedAt: previousWindow, lastReceivedAt: previousWindow, serviceId: service.id, correlationId: randomUUID(), createdBy: f.owner.id });
+    await Promise.allSettled([storeEvaluation(f.workspace.id, slo, now), storeEvaluation(f.workspace.id, slo, now)]);
+    expect((await AlertModel.findById(matching._id))!.status).toBe('open'); expect(await OutboxEventModel.countDocuments({ eventType: 'slo.recovered' })).toBe(0);
+    await SliSampleModel.create({ workspaceId: f.workspace.id, serviceId: service._id, sloId: slo._id, sloVersion: 3, timestamp: now, bucketAt: new Date(Math.floor(now.getTime() / 300000) * 300000), good: 100, total: 100, source: 'api', idempotencyKey: 'recovery:healthy', metadata: {}, expiresAt: new Date(now.getTime() + 86400_000) });
+    const recoveryAt = new Date(now.getTime() + 60_000); await Promise.allSettled([storeEvaluation(f.workspace.id, slo, recoveryAt), storeEvaluation(f.workspace.id, slo, recoveryAt)]);
+    expect((await AlertModel.findById(matching._id))!.status).toBe('resolved'); expect((await AlertModel.findById(unrelated._id))!.status).toBe('open');
+    expect(await OutboxEventModel.countDocuments({ eventType: 'slo.recovered' })).toBe(1); const stored = await SloEvaluationModel.findOne({ sloId: slo._id, windowEnd: recoveryAt }); expect(stored).toMatchObject({ sloVersion: 3, windowEnd: recoveryAt, recoveredAt: recoveryAt });
+    expect((await SloEvaluationModel.findOne({ sloId: slo._id, windowEnd: previousWindow }))!.state).toBe('breaching');
+    await SliSampleModel.create({ workspaceId: f.workspace.id, serviceId: service._id, sloId: slo._id, sloVersion: 3, timestamp: new Date(now.getTime() - 30_000), bucketAt: new Date(Math.floor(now.getTime() / 300000) * 300000), good: 0, total: 1000, source: 'api', idempotencyKey: 'recovery:late-bad', metadata: {}, expiresAt: new Date(now.getTime() + 86400_000) });
+    const staleAt = new Date(now.getTime() + 30_000); await storeEvaluation(f.workspace.id, slo, staleAt);
+    expect(await SloEvaluationModel.findOne({ sloId: slo._id, windowEnd: staleAt })).toBeNull(); expect((await AlertModel.findById(matching._id))!.status).toBe('resolved'); expect(await OutboxEventModel.countDocuments({ eventType: 'slo.breached' })).toBe(0);
+    expect(await OutboxEventModel.countDocuments({ eventType: 'slo.recovered' })).toBe(1);
+    expect(await EscalationModel.countDocuments({ alertId: matching._id })).toBeLessThanOrEqual(1);
+    expect(await AlertModel.countDocuments({ workspaceId: f.workspace.id, fingerprint: `slo:${slo.objectiveKey}` })).toBe(1);
+  });
+
+  it('aggregates bounded workspace metrics and preserves empty and tenant-isolated states', async () => {
+    const f = await fixture(); const now = new Date();
+    const [owned, ownerless] = await ServiceModel.create([
+      { workspaceId: f.workspace.id, name: 'API', slug: 'api', lifecycle: 'active', criticality: 'tier1', ownerIds: [f.owner.id], projectIds: [], labels: {}, links: [], createdBy: f.owner.id, updatedBy: f.owner.id, archivedAt: null },
+      { workspaceId: f.workspace.id, name: 'Legacy', slug: 'legacy', lifecycle: 'deprecated', criticality: 'tier3', ownerIds: [f.outsider.id], projectIds: [], labels: {}, links: [], createdBy: f.owner.id, updatedBy: f.owner.id, archivedAt: null },
+    ]);
+    const slo = await ServiceLevelObjectiveModel.create({ workspaceId: f.workspace.id, serviceId: owned!._id, objectiveKey: randomUUID(), name: 'Availability', enabled: true, indicatorType: 'availability', objectiveTarget: 99, rollingWindowDays: 7, dataSource: { type: 'api' }, missingDataPolicy: 'unknown', burnRateAlerts: [], version: 1, nextEvaluationAt: new Date(now.getTime() + 60_000), createdBy: f.owner.id, updatedBy: f.owner.id, archivedAt: null });
+    await SliSampleModel.create({ workspaceId: f.workspace.id, serviceId: owned!._id, sloId: slo._id, sloVersion: 1, timestamp: new Date(now.getTime() - 1000), bucketAt: new Date(Math.floor(now.getTime() / 300000) * 300000), good: 99, total: 100, source: 'api', idempotencyKey: 'metrics:sample', metadata: {}, expiresAt: new Date(now.getTime() + 86400_000) });
+    const monitor = await SyntheticMonitorModel.create({ workspaceId: f.workspace.id, serviceId: owned!._id, name: 'Health', enabled: true, url: 'https://health.company.com', method: 'GET', intervalSeconds: 60, timeoutMs: 1000, maxRedirects: 0, expectedStatusMin: 200, expectedStatusMax: 299, health: 'healthy', nextRunAt: new Date(now.getTime() + 60_000), createdBy: f.owner.id, updatedBy: f.owner.id, archivedAt: null });
+    await SyntheticMonitorRunModel.create([{ workspaceId: f.workspace.id, serviceId: owned!._id, monitorId: monitor._id, scheduledAt: new Date(now.getTime() - 2000), idempotencyKey: 'metrics:run:1', status: 'completed', endpointHealthy: false, latencyMs: 100, attemptCount: 1, completedAt: new Date(now.getTime() - 2000) }, { workspaceId: f.workspace.id, serviceId: owned!._id, monitorId: monitor._id, scheduledAt: new Date(now.getTime() - 1000), idempotencyKey: 'metrics:run:2', status: 'completed', endpointHealthy: true, latencyMs: 300, attemptCount: 1, completedAt: new Date(now.getTime() - 1000) }]);
+    const cookie = await f.cookie(); const base = `/api/workspaces/${f.workspace.id}/reliability/metrics`;
+    const result = await request(app).get(base).set('Cookie', cookie).expect(200);
+    expect(result.body.servicesByLifecycle).toEqual(expect.arrayContaining([{ _id: 'active', count: 1 }, { _id: 'deprecated', count: 1 }]));
+    expect(result.body.servicesByCriticality).toEqual(expect.arrayContaining([{ _id: 'tier1', count: 1 }, { _id: 'tier3', count: 1 }]));
+    expect(result.body.servicesWithoutOwners).toBe(1); expect(result.body.monitor).toMatchObject({ executions: 2, successRate: 0.5, failureDurationMs: 1000, insufficientData: false });
+    expect(result.body.monitor.latencyMs).toEqual({ p50: 100, p95: 300, p99: 300 }); expect(result.body.complianceByService).toHaveLength(1); expect(result.body.highestRiskServices[0].serviceId).toBe(owned!.id);
+    expect((await request(app).get(base).query({ from: new Date(now.getTime() - 91 * 86400_000).toISOString(), to: now.toISOString() }).set('Cookie', cookie)).status).toBe(400);
+    const other = await request(app).get(`/api/workspaces/${f.other.id}/reliability/metrics`).set('Cookie', await f.cookie(f.outsider)).expect(200);
+    expect(other.body.servicesByLifecycle).toEqual([]); expect(other.body.monitor).toMatchObject({ executions: 0, successRate: null, insufficientData: true });
+    expect(await SloEvaluationModel.countDocuments({ workspaceId: f.other.id })).toBe(0); expect(ownerless).toBeTruthy();
+  });
+
+  it('groups overlapping incident and alert history by service and excludes open incidents from resolution means', async () => {
+    const f = await fixture(); const now = new Date(); const from = new Date(now.getTime() - 3600_000);
+    const [api, database] = await ServiceModel.create([
+      { workspaceId: f.workspace.id, name: 'API', slug: 'api', lifecycle: 'active', criticality: 'tier1', ownerIds: [f.owner.id], projectIds: [], labels: {}, links: [], createdBy: f.owner.id, updatedBy: f.owner.id, archivedAt: null },
+      { workspaceId: f.workspace.id, name: 'Database', slug: 'database', lifecycle: 'retired', criticality: 'tier1', ownerIds: [f.owner.id], projectIds: [], labels: {}, links: [], createdBy: f.owner.id, updatedBy: f.owner.id, archivedAt: now },
+    ]);
+    const [resolved, open, overlap, foreign] = await IncidentModel.create([
+      { workspaceId: f.workspace.id, incidentNumber: 'INC-100001', title: 'Resolved', severity: 'sev2', declaredBy: f.owner.id, declaredAt: new Date(now.getTime() - 1800_000), createdAt: new Date(now.getTime() - 1800_000), resolvedAt: new Date(now.getTime() - 1200_000) },
+      { workspaceId: f.workspace.id, incidentNumber: 'INC-100002', title: 'Open', severity: 'sev3', declaredBy: f.owner.id, declaredAt: new Date(now.getTime() - 900_000), createdAt: new Date(now.getTime() - 900_000) },
+      { workspaceId: f.workspace.id, incidentNumber: 'INC-100003', title: 'Overlap', severity: 'sev2', declaredBy: f.owner.id, declaredAt: new Date(now.getTime() - 600_000), createdAt: new Date(now.getTime() - 600_000), resolvedAt: new Date(now.getTime() - 300_000) },
+      { workspaceId: f.other.id, incidentNumber: 'INC-200001', title: 'Foreign', severity: 'sev1', declaredBy: f.outsider.id, declaredAt: new Date(now.getTime() - 600_000), createdAt: new Date(now.getTime() - 600_000), resolvedAt: now },
+    ]);
+    await ServiceRelationshipModel.create([
+      { workspaceId: f.workspace.id, serviceId: api!._id, targetType: 'incident', targetId: resolved!._id, createdBy: f.owner.id, archivedAt: null },
+      { workspaceId: f.workspace.id, serviceId: api!._id, targetType: 'incident', targetId: open!._id, createdBy: f.owner.id, archivedAt: null },
+      { workspaceId: f.workspace.id, serviceId: api!._id, targetType: 'incident', targetId: overlap!._id, createdBy: f.owner.id, archivedAt: null },
+      { workspaceId: f.workspace.id, serviceId: database!._id, targetType: 'incident', targetId: overlap!._id, createdBy: f.owner.id, archivedAt: null },
+      { workspaceId: f.other.id, serviceId: new mongoose.Types.ObjectId(), targetType: 'incident', targetId: foreign!._id, createdBy: f.outsider.id, archivedAt: null },
+    ]);
+    await AlertModel.create([{ workspaceId: f.workspace.id, fingerprint: 'metrics:api:1', title: 'API alert', severity: 'sev2', status: 'open', occurrenceCount: 1, firstReceivedAt: now, lastReceivedAt: now, serviceId: api!.id, correlationId: randomUUID(), createdBy: f.owner.id }, { workspaceId: f.workspace.id, fingerprint: 'metrics:db:1', title: 'DB alert', severity: 'sev2', status: 'resolved', occurrenceCount: 1, firstReceivedAt: now, lastReceivedAt: now, serviceId: database!.id, correlationId: randomUUID(), createdBy: f.owner.id }, { workspaceId: f.other.id, fingerprint: 'metrics:foreign:1', title: 'Foreign', severity: 'sev1', status: 'open', occurrenceCount: 1, firstReceivedAt: now, lastReceivedAt: now, serviceId: api!.id, correlationId: randomUUID(), createdBy: f.outsider.id }]);
+    const result = await request(app).get(`/api/workspaces/${f.workspace.id}/reliability/metrics`).query({ from: from.toISOString(), to: new Date(now.getTime() + 1000).toISOString() }).set('Cookie', await f.cookie()).expect(200);
+    expect(result.body.alertsByService).toEqual(expect.arrayContaining([{ _id: api!.id, count: 1 }, { _id: database!.id, count: 1 }]));
+    expect(result.body.incidentsByService).toEqual(expect.arrayContaining([{ serviceId: api!.id, count: 3, meanResolutionMs: 450_000 }, { serviceId: database!.id, count: 1, meanResolutionMs: 300_000 }]));
+    expect(JSON.stringify(result.body)).not.toContain(foreign!.id);
+  });
 });
 afterEach(() => vi.restoreAllMocks());
 afterAll(async () => {

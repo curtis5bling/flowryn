@@ -119,11 +119,12 @@ export const storeEvaluation = async (workspaceId: string, slo: InstanceType<typ
       if (existing) Object.assign(result, existing);
       return;
     }
+    const newer = await SloEvaluationModel.exists({ workspaceId, objectiveKey: slo.objectiveKey, windowEnd: { $gt: now } }).session(session);
     const previous = await SloEvaluationModel.findOne({ workspaceId, objectiveKey: slo.objectiveKey, ...(slo.transitionBaselineAt ? { createdAt: { $gte: slo.transitionBaselineAt } } : {}), windowEnd: { $lte: now } }).sort({ windowEnd: -1 }).session(session);
     const previouslyBreaching = Boolean(previous?.breaching);
     if (previouslyBreaching && (result.state !== 'healthy' || result.burnWindows.some((window) => !window.recovered))) result.breaching = true;
     const stored = await SloEvaluationModel.updateOne({ sloId: slo._id, sloVersion: slo.version, windowEnd: now }, { $setOnInsert: { ...result, ...(result.breaching && !previouslyBreaching ? { breachedAt: now } : {}), ...(!result.breaching && previouslyBreaching ? { recoveredAt: now } : {}) } }, { upsert: true, session });
-    if (!stored.upsertedCount) return;
+    if (!stored.upsertedCount || newer) return;
     const context: AutomationContext = { principal: automationPrincipal, configuredBy: String(slo.updatedBy), correlationId: `slo:${slo.objectiveKey}`, causationId: `evaluation:${slo.id}:${now.toISOString()}`, chainDepth: 0, rulePath: [] };
     const payload = { actorId: automationActorId, serviceId: String(slo.serviceId), sloId: slo.id, sloVersion: slo.version, windowStart: result.windowStart.toISOString(), windowEnd: now.toISOString(), ...(result.longBurnRate === null ? {} : { burnRate: result.longBurnRate }), ...(result.remainingBudget === null ? {} : { remainingBudget: result.remainingBudget }) };
     if (result.breaching && !previouslyBreaching) {
@@ -206,9 +207,9 @@ export const processReliabilityWork = async (now = new Date(), owner = 'reliabil
   if (!run) { await SyntheticMonitorModel.updateOne({ _id: monitor._id, leaseOwner }, { $unset: { leaseOwner: 1, leaseExpiresAt: 1 } }); return false; }
   let healthTransition: 'failed' | 'recovered' | undefined;
   try {
-    const fresh = await SyntheticMonitorModel.findOne({ _id: monitor._id, enabled: true, archivedAt: null, configVersion: monitor.configVersion, leaseOwner, leaseExpiresAt: { $gt: new Date() } }).select('+secretCiphertext +secretKeyVersion');
-    if (!fresh) { await SyntheticMonitorRunModel.updateOne({ _id: run._id, status: 'running', leaseOwner }, { $set: { status: 'completed', errorCode: 'MONITOR_CONFIGURATION_CHANGED', completedAt: new Date() }, $unset: { leaseOwner: 1, leaseExpiresAt: 1 } }); await SyntheticMonitorModel.updateOne({ _id: monitor._id, leaseOwner }, { $set: { nextRunAt: nextMonitorRunAt(now, monitor.intervalSeconds!) }, $unset: { retryScheduledAt: 1, leaseOwner: 1, leaseExpiresAt: 1 } }); return true; }
-    if (!(await ServiceModel.exists({ workspaceId: fresh.workspaceId, _id: fresh.serviceId, archivedAt: null }))) { await SyntheticMonitorModel.updateOne({ _id: fresh._id, leaseOwner }, { $set: { enabled: false, health: 'unknown' }, $unset: { retryScheduledAt: 1, leaseOwner: 1, leaseExpiresAt: 1 } }); await SyntheticMonitorRunModel.updateOne({ _id: run._id, status: 'running', leaseOwner }, { $set: { status: 'completed', errorCode: 'SERVICE_ARCHIVED', completedAt: new Date() }, $unset: { leaseOwner: 1, leaseExpiresAt: 1 } }); return true; }
+    const fresh = await SyntheticMonitorModel.findOne({ _id: monitor._id, enabled: true, archivedAt: null, configVersion: monitor.configVersion, leaseOwner, leaseExpiresAt: { $gt: now } }).select('+secretCiphertext +secretKeyVersion');
+    if (!fresh) { await SyntheticMonitorRunModel.updateOne({ _id: run._id, status: 'running', leaseOwner }, { $set: { status: 'completed', errorCode: 'MONITOR_CONFIGURATION_CHANGED', completedAt: now }, $unset: { leaseOwner: 1, leaseExpiresAt: 1 } }); await SyntheticMonitorModel.updateOne({ _id: monitor._id, leaseOwner }, { $set: { nextRunAt: nextMonitorRunAt(now, monitor.intervalSeconds!) }, $unset: { retryScheduledAt: 1, leaseOwner: 1, leaseExpiresAt: 1 } }); return true; }
+    if (!(await ServiceModel.exists({ workspaceId: fresh.workspaceId, _id: fresh.serviceId, archivedAt: null }))) { await SyntheticMonitorModel.updateOne({ _id: fresh._id, leaseOwner }, { $set: { enabled: false, health: 'unknown' }, $unset: { retryScheduledAt: 1, leaseOwner: 1, leaseExpiresAt: 1 } }); await SyntheticMonitorRunModel.updateOne({ _id: run._id, status: 'running', leaseOwner }, { $set: { status: 'completed', errorCode: 'SERVICE_ARCHIVED', completedAt: now }, $unset: { leaseOwner: 1, leaseExpiresAt: 1 } }); return true; }
     const headers = fresh.secretCiphertext ? JSON.parse(decryptSecret({ workspaceId: fresh.workspaceId, _id: fresh._id, keyVersion: fresh.secretKeyVersion!, credentials: fresh.secretCiphertext })) : {};
     let endpointError = false;
     const result = await network({ url: assertSafeMonitorUrl(fresh.url!), method: fresh.method as 'GET' | 'HEAD', timeoutMs: fresh.timeoutMs!, maxRedirects: fresh.maxRedirects!, headers, assertion: fresh.textAssertion ?? undefined }).catch((error) => { if (infrastructureNetworkError(error)) throw error; endpointError = true; return { statusCode: 0, latencyMs: fresh.timeoutMs!, body: '' }; });
@@ -216,10 +217,10 @@ export const processReliabilityWork = async (now = new Date(), owner = 'reliabil
     const session = await mongoose.startSession();
     try {
       await session.withTransaction(async () => {
-        const fenced = await SyntheticMonitorModel.findOne({ _id: fresh._id, enabled: true, archivedAt: null, configVersion: fresh.configVersion, leaseOwner, leaseExpiresAt: { $gt: new Date() } }).session(session);
+        const fenced = await SyntheticMonitorModel.findOne({ _id: fresh._id, enabled: true, archivedAt: null, configVersion: fresh.configVersion, leaseOwner, leaseExpiresAt: { $gt: now } }).session(session);
         if (!fenced) throw new Error('LEASE_LOST');
         const slo = fenced.sloId ? await ServiceLevelObjectiveModel.findOne({ workspaceId: fenced.workspaceId, _id: fenced.sloId, serviceId: fenced.serviceId, enabled: true, archivedAt: null, 'dataSource.type': 'synthetic', $or: [{ 'dataSource.sourceId': { $exists: false } }, { 'dataSource.sourceId': String(fenced._id) }] }).session(session) : null;
-        const completed = await SyntheticMonitorRunModel.updateOne({ _id: run._id, status: 'running', leaseOwner }, { $set: { status: 'completed', endpointHealthy: healthy, statusCode: result.statusCode || null, latencyMs: result.latencyMs, errorCode: endpointError ? 'ENDPOINT_UNREACHABLE' : null, completedAt: new Date() }, $unset: { leaseOwner: 1, leaseExpiresAt: 1, nextAttemptAt: 1 } }, { session });
+        const completed = await SyntheticMonitorRunModel.updateOne({ _id: run._id, status: 'running', leaseOwner }, { $set: { status: 'completed', endpointHealthy: healthy, statusCode: result.statusCode || null, latencyMs: result.latencyMs, errorCode: endpointError ? 'ENDPOINT_UNREACHABLE' : null, completedAt: now }, $unset: { leaseOwner: 1, leaseExpiresAt: 1, nextAttemptAt: 1 } }, { session });
         if (!completed.modifiedCount) throw new Error('LEASE_LOST');
         const observationGood = healthy && (!slo || slo.indicatorType !== 'latency' || result.latencyMs <= slo.latencyThresholdMs!);
         if (slo) await SliSampleModel.updateOne({ workspaceId: fenced.workspaceId, idempotencyKey: key }, { $setOnInsert: { serviceId: fenced.serviceId, sloId: slo._id, sloVersion: slo.version, timestamp: now, bucketAt: new Date(Math.floor(now.getTime() / 300000) * 300000), good: observationGood ? 1 : 0, total: 1, latencyMs: [result.latencyMs], endpointHealthy: healthy, source: 'synthetic', sourceId: String(fenced._id), metadata: {}, expiresAt: new Date(now.getTime() + 400 * 86400_000) } }, { upsert: true, session });
@@ -232,11 +233,11 @@ export const processReliabilityWork = async (now = new Date(), owner = 'reliabil
   } catch {
     const stillOwned = await SyntheticMonitorModel.exists({ _id: monitor._id, configVersion: monitor.configVersion, leaseOwner });
     if (!stillOwned) {
-      await SyntheticMonitorRunModel.updateOne({ _id: run._id, status: 'running', leaseOwner }, { $set: { status: 'completed', errorCode: 'MONITOR_CONFIGURATION_CHANGED', completedAt: new Date() }, $unset: { leaseOwner: 1, leaseExpiresAt: 1, nextAttemptAt: 1 } });
+      await SyntheticMonitorRunModel.updateOne({ _id: run._id, status: 'running', leaseOwner }, { $set: { status: 'completed', errorCode: 'MONITOR_CONFIGURATION_CHANGED', completedAt: now }, $unset: { leaseOwner: 1, leaseExpiresAt: 1, nextAttemptAt: 1 } });
       return true;
     }
     const dead = (run.attemptCount ?? 1) >= 5; const retryAt = new Date(now.getTime() + Math.min(3600_000, 30_000 * 2 ** Math.max(0, (run.attemptCount ?? 1) - 1)) + Number.parseInt(key.slice(0, 4), 16) % 5000);
-    await SyntheticMonitorRunModel.updateOne({ _id: run._id, status: 'running', leaseOwner }, { $set: { status: dead ? 'deadLetter' : 'retrying', errorCode: 'MONITOR_INFRASTRUCTURE_FAILURE', ...(dead ? { completedAt: new Date() } : { nextAttemptAt: retryAt }) }, $unset: { leaseOwner: 1, leaseExpiresAt: 1 } });
+    await SyntheticMonitorRunModel.updateOne({ _id: run._id, status: 'running', leaseOwner }, { $set: { status: dead ? 'deadLetter' : 'retrying', errorCode: 'MONITOR_INFRASTRUCTURE_FAILURE', ...(dead ? { completedAt: now } : { nextAttemptAt: retryAt }) }, $unset: { leaseOwner: 1, leaseExpiresAt: 1 } });
     await SyntheticMonitorModel.updateOne({ _id: monitor._id, leaseOwner }, { $set: { nextRunAt: dead ? nextMonitorRunAt(now, monitor.intervalSeconds!) : retryAt, ...(dead ? {} : { retryScheduledAt: scheduledAt }) }, ...(dead ? { $unset: { retryScheduledAt: 1, leaseOwner: 1, leaseExpiresAt: 1 } } : { $unset: { leaseOwner: 1, leaseExpiresAt: 1 } }) });
   }
   if (healthTransition === 'failed') publishAutomationHint({ workspaceId: String(monitor.workspaceId), actorId: automationActorId, entityId: monitor.id, type: 'monitor.failed' });
