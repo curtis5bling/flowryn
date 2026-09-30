@@ -436,6 +436,21 @@ describe('SLO evaluation and alert concurrency', () => {
     expect((await calculateEvaluation(f.workspace.id, slo, now)).burnWindows[0]).toMatchObject({ recoveryThreshold: 0, shortBurnRate: 0, longBurnRate: 0, recovered: true });
   });
 
+  it('orders same-minute transitions by SLO version before resolving an alert', async () => {
+    const f = await fixture(); const now = new Date('2026-09-29T12:00:00.000Z'); const objectiveKey = randomUUID();
+    const service = await ServiceModel.create({ workspaceId: f.workspace.id, name: 'Versioned API', slug: 'versioned-api', lifecycle: 'active', criticality: 'tier1', ownerIds: [f.owner.id], projectIds: [], labels: {}, links: [], createdBy: f.owner.id, updatedBy: f.owner.id, archivedAt: null });
+    const slo = await ServiceLevelObjectiveModel.create({ workspaceId: f.workspace.id, serviceId: service._id, objectiveKey, name: 'Availability v3', enabled: true, indicatorType: 'availability', objectiveTarget: 99, rollingWindowDays: 7, dataSource: { type: 'api' }, missingDataPolicy: 'unknown', burnRateAlerts: [], version: 3, createdBy: f.owner.id, updatedBy: f.owner.id, archivedAt: null });
+    const evaluation = (version: number, breaching: boolean) => ({ workspaceId: f.workspace.id, serviceId: service._id, sloId: new mongoose.Types.ObjectId(), objectiveKey, sloVersion: version, windowStart: new Date(now.getTime() - 7 * 86400_000), windowEnd: now, shortWindowStart: new Date(now.getTime() - 300_000), longWindowStart: new Date(now.getTime() - 3600_000), burnWindows: [], state: breaching ? 'breaching' : 'healthy', good: breaching ? 0 : 100, total: 100, compliance: breaching ? 0 : 1, remainingBudget: breaching ? 0 : 1, consumption: breaching ? 100 : 0, shortBurnRate: breaching ? 100 : 0, longBurnRate: breaching ? 100 : 0, breaching, ...(breaching ? { breachedAt: now } : {}) });
+    await SloEvaluationModel.create([evaluation(1, false), evaluation(2, true)]);
+    const alert = await AlertModel.create({ workspaceId: f.workspace.id, fingerprint: `slo:${objectiveKey}`, title: 'Versioned breach', severity: 'sev2', status: 'open', occurrenceCount: 1, firstReceivedAt: now, lastReceivedAt: now, serviceId: service.id, correlationId: randomUUID(), createdBy: f.owner.id });
+    await SliSampleModel.create({ workspaceId: f.workspace.id, serviceId: service._id, sloId: slo._id, sloVersion: 3, timestamp: now, bucketAt: new Date(Math.floor(now.getTime() / 300000) * 300000), good: 100, total: 100, source: 'api', idempotencyKey: 'same-minute:v3', metadata: {}, expiresAt: new Date(now.getTime() + 86400_000) });
+
+    await storeEvaluation(f.workspace.id, slo, now);
+
+    expect((await AlertModel.findById(alert._id))!.status).toBe('resolved');
+    expect(await OutboxEventModel.countDocuments({ workspaceId: f.workspace.id, eventType: 'slo.recovered' })).toBe(1);
+  });
+
   it('deduplicates concurrent evaluation snapshots, alerts, and transition outbox events', async () => {
     const f = await fixture();
     const policy = await PolicyModel.create({ workspaceId: f.workspace.id, name: 'SLO paging', description: '', enabled: true, steps: [{ id: randomUUID(), delayMinutes: 0, target: { type: 'users', userIds: [f.member.id] }, webhookIntegrationIds: [] }], repeatCount: 0, repeatDelayMinutes: 5, version: 1, createdBy: f.owner.id, updatedBy: f.owner.id, archivedAt: null });
@@ -480,7 +495,9 @@ describe('SLO evaluation and alert concurrency', () => {
       { workspaceId: f.workspace.id, name: 'Legacy', slug: 'legacy', lifecycle: 'deprecated', criticality: 'tier3', ownerIds: [f.outsider.id], projectIds: [], labels: {}, links: [], createdBy: f.owner.id, updatedBy: f.owner.id, archivedAt: null },
     ]);
     const slo = await ServiceLevelObjectiveModel.create({ workspaceId: f.workspace.id, serviceId: owned!._id, objectiveKey: randomUUID(), name: 'Availability', enabled: true, indicatorType: 'availability', objectiveTarget: 99, rollingWindowDays: 7, dataSource: { type: 'api' }, missingDataPolicy: 'unknown', burnRateAlerts: [], version: 1, nextEvaluationAt: new Date(now.getTime() + 60_000), createdBy: f.owner.id, updatedBy: f.owner.id, archivedAt: null });
+    const secondSlo = await ServiceLevelObjectiveModel.create({ workspaceId: f.workspace.id, serviceId: owned!._id, objectiveKey: randomUUID(), name: 'Latency', enabled: true, indicatorType: 'availability', objectiveTarget: 95, rollingWindowDays: 7, dataSource: { type: 'api' }, missingDataPolicy: 'unknown', burnRateAlerts: [], version: 1, nextEvaluationAt: new Date(now.getTime() + 60_000), createdBy: f.owner.id, updatedBy: f.owner.id, archivedAt: null });
     await SliSampleModel.create({ workspaceId: f.workspace.id, serviceId: owned!._id, sloId: slo._id, sloVersion: 1, timestamp: new Date(now.getTime() - 1000), bucketAt: new Date(Math.floor(now.getTime() / 300000) * 300000), good: 99, total: 100, source: 'api', idempotencyKey: 'metrics:sample', metadata: {}, expiresAt: new Date(now.getTime() + 86400_000) });
+    await SliSampleModel.create({ workspaceId: f.workspace.id, serviceId: owned!._id, sloId: secondSlo._id, sloVersion: 1, timestamp: new Date(now.getTime() - 1000), bucketAt: new Date(Math.floor(now.getTime() / 300000) * 300000), good: 90, total: 100, source: 'api', idempotencyKey: 'metrics:sample:second', metadata: {}, expiresAt: new Date(now.getTime() + 86400_000) });
     const monitor = await SyntheticMonitorModel.create({ workspaceId: f.workspace.id, serviceId: owned!._id, name: 'Health', enabled: true, url: 'https://health.company.com', method: 'GET', intervalSeconds: 60, timeoutMs: 1000, maxRedirects: 0, expectedStatusMin: 200, expectedStatusMax: 299, health: 'healthy', nextRunAt: new Date(now.getTime() + 60_000), createdBy: f.owner.id, updatedBy: f.owner.id, archivedAt: null });
     await SyntheticMonitorRunModel.create([{ workspaceId: f.workspace.id, serviceId: owned!._id, monitorId: monitor._id, scheduledAt: new Date(now.getTime() - 2000), idempotencyKey: 'metrics:run:1', status: 'completed', endpointHealthy: false, latencyMs: 100, attemptCount: 1, completedAt: new Date(now.getTime() - 2000) }, { workspaceId: f.workspace.id, serviceId: owned!._id, monitorId: monitor._id, scheduledAt: new Date(now.getTime() - 1000), idempotencyKey: 'metrics:run:2', status: 'completed', endpointHealthy: true, latencyMs: 300, attemptCount: 1, completedAt: new Date(now.getTime() - 1000) }]);
     const cookie = await f.cookie(); const base = `/api/workspaces/${f.workspace.id}/reliability/metrics`;
@@ -488,7 +505,7 @@ describe('SLO evaluation and alert concurrency', () => {
     expect(result.body.servicesByLifecycle).toEqual(expect.arrayContaining([{ _id: 'active', count: 1 }, { _id: 'deprecated', count: 1 }]));
     expect(result.body.servicesByCriticality).toEqual(expect.arrayContaining([{ _id: 'tier1', count: 1 }, { _id: 'tier3', count: 1 }]));
     expect(result.body.servicesWithoutOwners).toBe(1); expect(result.body.monitor).toMatchObject({ executions: 2, successRate: 0.5, failureDurationMs: 1000, insufficientData: false });
-    expect(result.body.monitor.latencyMs).toEqual({ p50: 100, p95: 300, p99: 300 }); expect(result.body.complianceByService).toHaveLength(1); expect(result.body.highestRiskServices[0].serviceId).toBe(owned!.id);
+    expect(result.body.monitor.latencyMs).toEqual({ p50: 100, p95: 300, p99: 300 }); expect(result.body.complianceByService).toHaveLength(2); expect(result.body.highestRiskServices[0].serviceId).toBe(owned!.id); expect(new Set(result.body.highestRiskServices.map((item: { serviceId: string }) => item.serviceId)).size).toBe(result.body.highestRiskServices.length);
     expect((await request(app).get(base).query({ from: new Date(now.getTime() - 91 * 86400_000).toISOString(), to: now.toISOString() }).set('Cookie', cookie)).status).toBe(400);
     const other = await request(app).get(`/api/workspaces/${f.other.id}/reliability/metrics`).set('Cookie', await f.cookie(f.outsider)).expect(200);
     expect(other.body.servicesByLifecycle).toEqual([]); expect(other.body.monitor).toMatchObject({ executions: 0, successRate: null, insufficientData: true });

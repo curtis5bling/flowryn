@@ -132,7 +132,7 @@ export const storeEvaluation = async (workspaceId: string, slo: InstanceType<typ
       return;
     }
     const newer = await SloEvaluationModel.exists({ workspaceId, objectiveKey: slo.objectiveKey, windowEnd: { $gt: now } }).session(session);
-    const previous = await SloEvaluationModel.findOne({ workspaceId, objectiveKey: slo.objectiveKey, ...(slo.transitionBaselineAt ? { createdAt: { $gte: slo.transitionBaselineAt } } : {}), windowEnd: { $lte: now } }).sort({ windowEnd: -1 }).session(session);
+    const previous = await SloEvaluationModel.findOne({ workspaceId, objectiveKey: slo.objectiveKey, ...(slo.transitionBaselineAt ? { createdAt: { $gte: slo.transitionBaselineAt } } : {}), windowEnd: { $lte: now } }).sort({ windowEnd: -1, sloVersion: -1, createdAt: -1 }).session(session);
     const previouslyBreaching = Boolean(previous?.breaching);
     if (previouslyBreaching && (result.state !== 'healthy' || result.burnWindows.some((window) => !window.recovered))) result.breaching = true;
     const stored = await SloEvaluationModel.updateOne({ sloId: slo._id, sloVersion: slo.version, windowEnd: now }, { $setOnInsert: { ...result, ...(result.breaching && !previouslyBreaching ? { breachedAt: now } : {}), ...(!result.breaching && previouslyBreaching ? { recoveredAt: now } : {}) } }, { upsert: true, session });
