@@ -437,6 +437,20 @@ describe('SLO evaluation and alert concurrency', () => {
     expect(result.body.incidentsByService).toEqual(expect.arrayContaining([{ serviceId: api!.id, count: 3, meanResolutionMs: 450_000 }, { serviceId: database!.id, count: 1, meanResolutionMs: 300_000 }]));
     expect(JSON.stringify(result.body)).not.toContain(foreign!.id);
   });
+
+  it('uses time-valid SLO versions and excludes disabled monitor intervals from historical metrics', async () => {
+    const f = await fixture(); const base = new Date('2026-09-29T12:00:00.000Z');
+    const service = await ServiceModel.create({ workspaceId: f.workspace.id, name: 'History', slug: 'history', lifecycle: 'active', criticality: 'tier1', ownerIds: [f.owner.id], projectIds: [], labels: {}, links: [], createdBy: f.owner.id, updatedBy: f.owner.id, archivedAt: null });
+    const archivedAt = new Date(base.getTime() + 20_000);
+    const oldSlo = await ServiceLevelObjectiveModel.create({ workspaceId: f.workspace.id, serviceId: service._id, objectiveKey: randomUUID(), name: 'Historical availability', enabled: false, indicatorType: 'availability', objectiveTarget: 99, rollingWindowDays: 7, dataSource: { type: 'api' }, missingDataPolicy: 'unknown', burnRateAlerts: [], version: 1, createdAt: new Date(base.getTime() - 60_000), updatedAt: archivedAt, archivedAt, createdBy: f.owner.id, updatedBy: f.owner.id });
+    await SloEvaluationModel.create({ workspaceId: f.workspace.id, serviceId: service._id, sloId: oldSlo._id, objectiveKey: oldSlo.objectiveKey, sloVersion: 1, windowStart: new Date(base.getTime() - 86400_000), windowEnd: base, shortWindowStart: new Date(base.getTime() - 300_000), longWindowStart: new Date(base.getTime() - 3600_000), burnWindows: [], state: 'healthy', good: 100, total: 100, compliance: 1, remainingBudget: 1, consumption: 0, shortBurnRate: 0, longBurnRate: 0, breaching: false });
+    const monitor = await SyntheticMonitorModel.create({ workspaceId: f.workspace.id, serviceId: service._id, name: 'Historical monitor', enabled: true, url: 'https://history.company.com', method: 'GET', intervalSeconds: 60, timeoutMs: 1000, maxRedirects: 0, expectedStatusMin: 200, expectedStatusMax: 299, monitoringTransitions: [{ enabled: true, at: new Date(base.getTime() - 60_000) }, { enabled: false, at: new Date(base.getTime() + 10_000) }, { enabled: true, at: new Date(base.getTime() + 20_000) }], nextRunAt: new Date(base.getTime() + 60_000), createdBy: f.owner.id, updatedBy: f.owner.id, archivedAt: null });
+    await SyntheticMonitorRunModel.create([{ workspaceId: f.workspace.id, serviceId: service._id, monitorId: monitor._id, scheduledAt: base, idempotencyKey: 'history:failed', status: 'completed', endpointHealthy: false, latencyMs: 10, attemptCount: 1, completedAt: base }, { workspaceId: f.workspace.id, serviceId: service._id, monitorId: monitor._id, scheduledAt: new Date(base.getTime() + 30_000), idempotencyKey: 'history:healthy', status: 'completed', endpointHealthy: true, latencyMs: 10, attemptCount: 1, completedAt: new Date(base.getTime() + 30_000) }]);
+    const historical = await request(app).get(`/api/workspaces/${f.workspace.id}/reliability/metrics`).query({ from: new Date(base.getTime() - 60_000).toISOString(), to: new Date(base.getTime() + 10_000).toISOString() }).set('Cookie', await f.cookie()).expect(200);
+    expect(historical.body.complianceByService).toEqual(expect.arrayContaining([expect.objectContaining({ serviceId: service.id, compliance: 1 })]));
+    const complete = await request(app).get(`/api/workspaces/${f.workspace.id}/reliability/metrics`).query({ from: new Date(base.getTime() - 60_000).toISOString(), to: new Date(base.getTime() + 40_000).toISOString() }).set('Cookie', await f.cookie()).expect(200);
+    expect(complete.body.monitor.failureDurationMs).toBe(20_000);
+  });
 });
 afterEach(() => vi.restoreAllMocks());
 afterAll(async () => {
