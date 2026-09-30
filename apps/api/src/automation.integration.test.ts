@@ -47,7 +47,7 @@ import { UserModel } from './models/User.js';
 import { WorkspaceModel } from './models/Workspace.js';
 import { WorkspaceMemberModel } from './models/WorkspaceMember.js';
 import { AlertModel, EscalationModel, PolicyModel } from './oncall/models.js';
-import { ServiceLevelObjectiveModel, ServiceModel, ServiceRelationshipModel, SliSampleModel, SloEvaluationModel, SyntheticMonitorModel, SyntheticMonitorRunModel } from './reliability/models.js';
+import { ServiceDependencyModel, ServiceLevelObjectiveModel, ServiceModel, ServiceRelationshipModel, SliSampleModel, SloEvaluationModel, SyntheticMonitorModel, SyntheticMonitorRunModel } from './reliability/models.js';
 import { calculateEvaluation, ingestSliBatch, processReliabilityWork, storeEvaluation } from './reliability/service.js';
 
 const app = createApp();
@@ -401,6 +401,20 @@ describe('reliability authorization and archival boundaries', () => {
     expect((await request(app).post(`${base}/monitors`).set('Cookie', cookie).send({ serviceId: service!.id, name: 'Denied monitor', enabled: false, url: 'https://denied.company.com', method: 'GET', intervalSeconds: 60, timeoutMs: 1000, maxRedirects: 0, expectedStatusMin: 200, expectedStatusMax: 299 })).status).not.toBe(201);
     expect((await request(app).post(`${base}/relationships`).set('Cookie', cookie).send({ serviceId: service!.id, targetType: 'project', targetId: f.project.id })).status).not.toBe(201);
     expect((await request(app).post(`${base}/dependencies`).set('Cookie', cookie).send({ upstreamServiceId: service!.id, downstreamServiceId: peer!.id, type: 'runtime', criticality: 'required', description: '', enabled: true })).status).not.toBe(201);
+  });
+});
+
+describe('dependency graph bounds', () => {
+  it('rejects an edge that would push an affected ancestor beyond 500 reachable services', async () => {
+    const f = await fixture();
+    const services = await ServiceModel.insertMany(Array.from({ length: 501 }, (_, index) => ({ workspaceId: f.workspace.id, name: `Bounded ${index}`, slug: `bounded-${index}`, lifecycle: 'active', criticality: 'tier3', ownerIds: [f.owner.id], projectIds: [], labels: {}, links: [], createdBy: f.owner.id, updatedBy: f.owner.id, archivedAt: null })));
+    const root = services[0]!; const leaves = services.slice(1, 500); const extra = services[500]!;
+    await ServiceDependencyModel.insertMany(leaves.map((leaf) => ({ workspaceId: f.workspace.id, upstreamServiceId: root._id, downstreamServiceId: leaf._id, type: 'runtime', criticality: 'required', description: '', enabled: true, createdBy: f.owner.id, archivedAt: null })));
+
+    const response = await request(app).post(`/api/workspaces/${f.workspace.id}/reliability/dependencies`).set('Cookie', await f.cookie()).send({ upstreamServiceId: leaves[0]!.id, downstreamServiceId: extra.id, type: 'runtime', criticality: 'required', description: '', enabled: true });
+
+    expect(response.status).toBe(409);
+    expect(await ServiceDependencyModel.countDocuments({ workspaceId: f.workspace.id, archivedAt: null })).toBe(499);
   });
 });
 
