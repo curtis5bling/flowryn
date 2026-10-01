@@ -352,6 +352,18 @@ describe('durable reliability monitor execution', () => {
 
 describe('reliability authorization and archival boundaries', () => {
   const serviceBody = (ownerId: string, slug = 'api') => ({ name: 'API', slug, description: '', lifecycle: 'active', criticality: 'tier1', ownerIds: [ownerId], projectIds: [], labels: {}, links: [] });
+  it('clears latency-only fields when versioning an SLO to another indicator type', async () => {
+    const f = await fixture(); const base = `/api/workspaces/${f.workspace.id}/reliability`; const cookie = await f.cookie();
+    const service = await request(app).post(`${base}/services`).set('Cookie', cookie).send(serviceBody(f.owner.id, 'latency-api')).expect(201);
+    const created = await request(app).post(`${base}/slos`).set('Cookie', cookie).send({ serviceId: service.body.service._id, name: 'Latency', description: '', enabled: true, indicatorType: 'latency', objectiveTarget: 99, rollingWindowDays: 7, latencyThresholdMs: 500, percentile: 95, dataSource: { type: 'api' }, missingDataPolicy: 'unknown', burnRateAlerts: [] }).expect(201);
+
+    const updated = await request(app).patch(`${base}/slos/${created.body.slo._id}`).set('Cookie', cookie).send({ indicatorType: 'availability' }).expect(200);
+
+    expect(updated.body.slo).toMatchObject({ indicatorType: 'availability', version: 2 });
+    expect(updated.body.slo.latencyThresholdMs).toBeUndefined();
+    expect(updated.body.slo.percentile).toBeUndefined();
+    expect((await ServiceLevelObjectiveModel.findById(created.body.slo._id))!.archivedAt).toBeTruthy();
+  });
   it('enforces owner/admin/member/suspended boundaries and denies cross-workspace histories and relationships', async () => {
     const f = await fixture(); const base = `/api/workspaces/${f.workspace.id}/reliability`;
     expect((await request(app).post(`${base}/services`).set('Cookie', await f.cookie(f.member)).send(serviceBody(f.owner.id))).status).toBe(403);
