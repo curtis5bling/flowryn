@@ -11,6 +11,7 @@ import automationRouter from './routes/automation.js';
 import collaborationRouter from './routes/collaboration.js';
 import inboundRouter from './routes/inbound.js';
 import incidentsRouter from './routes/incidents.js';
+import intelligenceRouter from './routes/intelligence.js';
 import oncallRouter from './routes/oncall.js';
 import projectsRouter from './routes/projects.js';
 import publicStatusRouter from './routes/public-status.js';
@@ -60,6 +61,7 @@ export const createApp = () => {
   app.use('/api/workspaces', oncallRouter);
   app.use('/api/workspaces', automationRouter);
   app.use('/api/workspaces', incidentsRouter);
+  app.use('/api/workspaces', intelligenceRouter);
   app.use('/api/workspaces', collaborationRouter);
   app.use('/api/workspaces', projectsRouter);
   app.use('/api/workspaces', workspacesRouter);

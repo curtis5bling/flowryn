@@ -11,6 +11,7 @@ import { createRoot } from 'react-dom/client';
 import { createWorkspace, getCurrentUser, listWorkspaces, login, logout, register } from './api';
 import { AutomationApp } from './components/AutomationApp';
 import { IncidentApp } from './components/IncidentApp';
+import { IntelligenceApp } from './components/IntelligenceApp';
 import { OncallApp } from './components/OncallApp';
 import { PublicStatusPage } from './components/PublicStatusPage';
 import { ReliabilityApp } from './components/ReliabilityApp';
@@ -103,7 +104,7 @@ function AuthShell({
           {mutation.error && <p className="form-error">{mutation.error.message}</p>}
           <button className="primary-button" disabled={mutation.isPending}>
             {mutation.isPending ? 'Opening...' : mode === 'login' ? 'Sign in' : 'Create account'}{' '}
-            <span>↗</span>
+            <span>â†—</span>
           </button>
         </form>
         <button
@@ -154,7 +155,7 @@ function Onboarding({ onComplete }: { onComplete: () => void }) {
           </label>
           {mutation.error && <p className="form-error">{mutation.error.message}</p>}
           <button className="primary-button" disabled={mutation.isPending}>
-            {mutation.isPending ? 'Creating...' : 'Enter workspace'} <span>↗</span>
+            {mutation.isPending ? 'Creating...' : 'Enter workspace'} <span>â†—</span>
           </button>
         </form>
       </div>
@@ -169,7 +170,7 @@ function App() {
     queryFn: listWorkspaces,
     enabled: Boolean(me.data),
   });
-  const [area, setArea] = useState<'projects' | 'incidents' | 'automation' | 'oncall' | 'status' | 'reliability'>('projects');
+  const [area, setArea] = useState<'projects' | 'incidents' | 'automation' | 'oncall' | 'status' | 'reliability' | 'intelligence'>('projects');
   const [authMode, setAuthMode] = useState<AuthMode>('login');
   const [showOnboarding, setShowOnboarding] = useState(false);
   const logoutMutation = useMutation({
@@ -222,8 +223,9 @@ function App() {
         </button>
         <button aria-pressed={area === 'status'} onClick={() => setArea('status')}>Status pages</button>
         <button aria-pressed={area === 'reliability'} onClick={() => setArea('reliability')}>Reliability</button>
+        <button aria-pressed={area === 'intelligence'} onClick={() => setArea('intelligence')}>Priorities</button>
       </nav>
-      {area === 'reliability' ? <ReliabilityApp workspaceId={activeWorkspace.id} role={activeWorkspace.role} /> : area === 'status' ? <StatusAdminApp workspaceId={activeWorkspace.id} role={activeWorkspace.role} /> : area === 'oncall' ? (
+      {area === 'intelligence' ? <IntelligenceApp workspaceId={activeWorkspace.id} role={activeWorkspace.role} /> : area === 'reliability' ? <ReliabilityApp workspaceId={activeWorkspace.id} role={activeWorkspace.role} /> : area === 'status' ? <StatusAdminApp workspaceId={activeWorkspace.id} role={activeWorkspace.role} /> : area === 'oncall' ? (
         <OncallApp
           workspaceId={activeWorkspace.id}
           workspaceName={activeWorkspace.name}

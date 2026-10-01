@@ -1,4 +1,5 @@
 import { ensureIncidentStorage } from '../incidents/storage.js';
+import { intelligenceModels } from '../intelligence/models.js';
 import { oncallModels } from '../oncall/models.js';
 import { reliabilityModels } from '../reliability/models.js';
 import { statusModels } from '../status/models.js';
@@ -11,5 +12,5 @@ export const ensureAutomationStorage = async () => {
   encryptionConfig();
   subscriberLookupKey();
   await ensureIncidentStorage();
-  await Promise.all([...automationModels, ...oncallModels, ...statusModels, ...reliabilityModels].map((model) => model.init()));
+  await Promise.all([...automationModels, ...oncallModels, ...statusModels, ...reliabilityModels, ...intelligenceModels].map((model) => model.init()));
 };

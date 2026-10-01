@@ -93,3 +93,4 @@ Choose **Reliability** for the workspace service catalog, bounded dependency imp
 # Public service health
 
 Flowryn includes workspace-managed public status pages, sanitized public incident updates, scheduled maintenance, and privacy-conscious subscriptions. See [Public status pages](docs/STATUS_PAGES.md) for the publication boundary, API/cache behavior, worker recovery, and availability methodology.
+Milestone 10 adds deterministic [operational intelligence](docs/OPERATIONAL_INTELLIGENCE.md): explainable workspace priority signals, advisory next actions, immutable scoring policies, bounded server metrics, and personal/operations queues. The [requirement matrix](docs/MILESTONE_10_MATRIX.md) maps the release to implementation and evidence.

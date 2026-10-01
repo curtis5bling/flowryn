@@ -75,3 +75,4 @@ Metrics are MongoDB aggregation facets scoped to the same workspace and validate
 # Status publication boundary
 
 Status-page records form a public projection beside the internal incident domain. Management writes are tenant-scoped and audited; public routes serialize explicit allowlists. Maintenance and subscriber publication work runs through the existing automation worker and MongoDB transaction infrastructure. See [STATUS_PAGES.md](STATUS_PAGES.md).
+Operational intelligence is a derived MongoDB projection processed by the existing automation worker. It reads authoritative domain records through bounded queries, stores immutable policy/score snapshots, and uses empty realtime invalidations while REST remains authoritative. See [OPERATIONAL_INTELLIGENCE.md](OPERATIONAL_INTELLIGENCE.md).

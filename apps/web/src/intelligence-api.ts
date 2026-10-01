@@ -1,0 +1,13 @@
+import { request } from './api';
+export type IntelligenceSignal = { _id: string; sourceType: string; sourceId: string; state: string; score: number; scoreGroup: 'now'|'soon'|'watch'; severity: string; urgency: string; impact: string; confidence: string; explanation: string; factors: Array<{ key: string; contribution: number; explanation: string; unknown: boolean }>; serviceId?: string; projectId?: string; lastObservedAt: string };
+export type Recommendation = { _id: string; signalId: string; type: string; explanation: string; deepLink: string; state: string; requiredPermission: string };
+export type Policy = { _id: string; version: number; name: string; active: boolean; configuration: { weights: Record<string, number>; thresholds: { now: number; soon: number }; maximumActiveRecommendations: number } };
+export const listPriority = (workspaceId: string, workspace = false) => request<{signals: IntelligenceSignal[]; counts: Record<string,number>; total:number}>(`/api/workspaces/${workspaceId}/intelligence/queue/${workspace ? 'workspace' : 'personal'}?limit=100`);
+export const listRecommendations = (workspaceId: string) => request<{recommendations: Recommendation[]}>(`/api/workspaces/${workspaceId}/intelligence/recommendations`);
+export const getActivePolicy = (workspaceId: string) => request<{policy: Policy}>(`/api/workspaces/${workspaceId}/intelligence/policies/active`);
+export const listPolicies = (workspaceId: string) => request<{policies: Policy[]}>(`/api/workspaces/${workspaceId}/intelligence/policies`);
+export const reconcileIntelligence = (workspaceId: string) => request(`/api/workspaces/${workspaceId}/intelligence/reconcile`, { method: 'POST', body: '{}' });
+export const recommendationAction = (workspaceId: string, id: string, action: 'accept'|'dismiss'|'snooze'|'complete'|'reopen', snoozeUntil?: string) => request(`/api/workspaces/${workspaceId}/intelligence/recommendations/${id}/${action}`, { method: 'POST', body: JSON.stringify({ operationId: crypto.randomUUID(), ...(snoozeUntil ? { snoozeUntil } : {}) }) });
+export const activatePolicy = (workspaceId: string, id: string, expectedActiveVersion: number) => request(`/api/workspaces/${workspaceId}/intelligence/policies/${id}/activate`, { method: 'POST', body: JSON.stringify({ operationId: crypto.randomUUID(), expectedActiveVersion }) });
+export const createPolicy = (workspaceId: string, body: unknown) => request(`/api/workspaces/${workspaceId}/intelligence/policies`, { method: 'POST', body: JSON.stringify(body) });
+export const getIntelligenceMetrics = (workspaceId: string) => request<{byType:Array<{_id:string;count:number}>; repeatedSignals:number; insufficientData:boolean}>(`/api/workspaces/${workspaceId}/intelligence/metrics`);
