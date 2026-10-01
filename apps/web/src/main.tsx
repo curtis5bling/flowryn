@@ -104,7 +104,7 @@ function AuthShell({
           {mutation.error && <p className="form-error">{mutation.error.message}</p>}
           <button className="primary-button" disabled={mutation.isPending}>
             {mutation.isPending ? 'Opening...' : mode === 'login' ? 'Sign in' : 'Create account'}{' '}
-            <span>â†—</span>
+            <span aria-hidden="true">→</span>
           </button>
         </form>
         <button
@@ -155,7 +155,7 @@ function Onboarding({ onComplete }: { onComplete: () => void }) {
           </label>
           {mutation.error && <p className="form-error">{mutation.error.message}</p>}
           <button className="primary-button" disabled={mutation.isPending}>
-            {mutation.isPending ? 'Creating...' : 'Enter workspace'} <span>â†—</span>
+            {mutation.isPending ? 'Creating...' : 'Enter workspace'} <span aria-hidden="true">→</span>
           </button>
         </form>
       </div>
@@ -225,7 +225,7 @@ function App() {
         <button aria-pressed={area === 'reliability'} onClick={() => setArea('reliability')}>Reliability</button>
         <button aria-pressed={area === 'intelligence'} onClick={() => setArea('intelligence')}>Priorities</button>
       </nav>
-      {area === 'intelligence' ? <IntelligenceApp workspaceId={activeWorkspace.id} role={activeWorkspace.role} /> : area === 'reliability' ? <ReliabilityApp workspaceId={activeWorkspace.id} role={activeWorkspace.role} /> : area === 'status' ? <StatusAdminApp workspaceId={activeWorkspace.id} role={activeWorkspace.role} /> : area === 'oncall' ? (
+      {area === 'intelligence' ? <IntelligenceApp workspaceId={activeWorkspace.id} role={activeWorkspace.role} onNavigate={(deepLink) => { window.history.replaceState({}, '', deepLink); setArea(deepLink.startsWith('/incidents') ? 'incidents' : deepLink.startsWith('/oncall') ? 'oncall' : deepLink.startsWith('/reliability') ? 'reliability' : deepLink.startsWith('/automation') ? 'automation' : deepLink.startsWith('/status') ? 'status' : 'projects'); }} /> : area === 'reliability' ? <ReliabilityApp workspaceId={activeWorkspace.id} role={activeWorkspace.role} /> : area === 'status' ? <StatusAdminApp workspaceId={activeWorkspace.id} role={activeWorkspace.role} /> : area === 'oncall' ? (
         <OncallApp
           workspaceId={activeWorkspace.id}
           workspaceName={activeWorkspace.name}
