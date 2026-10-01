@@ -23,13 +23,13 @@ export const IntelligenceScoreSnapshotModel = model('IntelligenceScoreSnapshot',
 
 const recommendation = new Schema({
   workspaceId: oid, signalId: oid, deduplicationKey: { type: String, required: true }, type: String, explanation: { type: String, maxlength: 400 }, facts: Schema.Types.Mixed, requiredPermission: String, preconditions: [String], deepLink: { type: String, maxlength: 300 },
-  state: { type: String, enum: ['open', 'accepted', 'dismissed', 'snoozed', 'completed', 'stale'], default: 'open' }, operationId: String, policyVersion: Number, sourceVersion: String,
+  state: { type: String, enum: ['open', 'accepted', 'dismissed', 'snoozed', 'completed', 'stale'], default: 'open' }, staleReason: { type: String, enum: ['source', 'expired', 'capacity'] }, operationId: String, policyVersion: Number, sourceVersion: String,
   acceptedAt: Date, dismissedAt: Date, snoozedUntil: Date, completedAt: Date, staleAt: Date, expiresAt: Date, actedBy: Schema.Types.ObjectId,
 }, { timestamps: true });
 recommendation.index({ workspaceId: 1, deduplicationKey: 1 }, { unique: true }); recommendation.index({ workspaceId: 1, state: 1, expiresAt: 1 });
 export const IntelligenceRecommendationModel = model('IntelligenceRecommendation', recommendation);
 
-const evaluation = new Schema({ workspaceId: oid, sourceType: String, sourceId: String, workKey: { type: String, required: true }, sourceRevision: String, status: { type: String, enum: ['pending', 'processing', 'completed', 'dead'], default: 'pending' }, availableAt: { type: Date, default: Date.now }, attemptCount: { type: Number, default: 0 }, leaseOwner: String, leaseExpiresAt: Date, error: String, completedAt: Date }, { timestamps: true });
+const evaluation = new Schema({ workspaceId: oid, sourceType: String, sourceId: String, workKey: { type: String, required: true }, sourceRevision: String, retryOperationIds: [String], status: { type: String, enum: ['pending', 'processing', 'completed', 'dead'], default: 'pending' }, availableAt: { type: Date, default: Date.now }, attemptCount: { type: Number, default: 0 }, leaseOwner: String, leaseExpiresAt: Date, error: String, completedAt: Date }, { timestamps: true });
 evaluation.index({ workspaceId: 1, workKey: 1 }, { unique: true }); evaluation.index({ status: 1, availableAt: 1, leaseExpiresAt: 1, _id: 1 });
 export const IntelligenceEvaluationModel = model('IntelligenceEvaluation', evaluation);
 
