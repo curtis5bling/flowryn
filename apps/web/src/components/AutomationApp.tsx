@@ -45,6 +45,7 @@ const actionNames: AutomationAction['type'][] = [
   'webhook.invoke',
   'incident.declare',
   'alert.create',
+  'sli.ingest',
 ];
 const newAction = (type: AutomationAction['type']): AutomationAction => {
   const id = crypto.randomUUID();
@@ -71,6 +72,8 @@ const newAction = (type: AutomationAction['type']): AutomationAction => {
       return { id, type, integrationId: '' };
     case 'incident.declare':
       return { id, type, title: '', severity: 'sev3' };
+    case 'sli.ingest':
+      return { id, type, serviceId: '', sloId: '', good: 1, total: 1, metadata: {} };
   }
 };
 const freshRule = (): AutomationRuleInput => ({
@@ -444,6 +447,7 @@ function ActionFields({
           )}
         </>
       )}
+      {action.type === 'sli.ingest' && <fieldset><legend>SLI sample</legend><label>Service ID<input required value={action.serviceId} onChange={(e) => change({ serviceId: e.target.value })} /></label><label>SLO ID<input required value={action.sloId} onChange={(e) => change({ sloId: e.target.value })} /></label><label>Good events<input type="number" min="0" max="1000000" value={action.good} onChange={(e) => change({ good: Number(e.target.value) })} /></label><label>Total events<input type="number" min="1" max="1000000" value={action.total} onChange={(e) => change({ total: Number(e.target.value) })} /></label></fieldset>}
     </>
   );
 }

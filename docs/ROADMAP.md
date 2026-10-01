@@ -48,6 +48,13 @@
 
 ## Later
 
+## Milestone 9: Service catalog and reliability
+
+- [x] Workspace service catalog, ownership, relationships and bounded dependency impact
+- [x] Immutable SLO versions, idempotent SLI samples and server-side error budgets
+- [x] SSRF-resistant HTTPS synthetic monitors on the existing durable worker
+- [x] Reliability APIs, metrics, accessible management UI, tests and deployment documentation
+
 - [ ] Intelligent prioritization and suggested next actions
 - [ ] Integrations for calendar, email, chat, and project tools
 - [ ] Audit logs, usage analytics, and production observability

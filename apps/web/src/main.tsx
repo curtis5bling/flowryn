@@ -13,6 +13,7 @@ import { AutomationApp } from './components/AutomationApp';
 import { IncidentApp } from './components/IncidentApp';
 import { OncallApp } from './components/OncallApp';
 import { PublicStatusPage } from './components/PublicStatusPage';
+import { ReliabilityApp } from './components/ReliabilityApp';
 import { StatusAdminApp } from './components/StatusAdminApp';
 import { WorkspaceApp } from './components/WorkspaceApp';
 import './styles.css';
@@ -168,7 +169,7 @@ function App() {
     queryFn: listWorkspaces,
     enabled: Boolean(me.data),
   });
-  const [area, setArea] = useState<'projects' | 'incidents' | 'automation' | 'oncall' | 'status'>('projects');
+  const [area, setArea] = useState<'projects' | 'incidents' | 'automation' | 'oncall' | 'status' | 'reliability'>('projects');
   const [authMode, setAuthMode] = useState<AuthMode>('login');
   const [showOnboarding, setShowOnboarding] = useState(false);
   const logoutMutation = useMutation({
@@ -220,8 +221,9 @@ function App() {
           On-Call
         </button>
         <button aria-pressed={area === 'status'} onClick={() => setArea('status')}>Status pages</button>
+        <button aria-pressed={area === 'reliability'} onClick={() => setArea('reliability')}>Reliability</button>
       </nav>
-      {area === 'status' ? <StatusAdminApp workspaceId={activeWorkspace.id} role={activeWorkspace.role} /> : area === 'oncall' ? (
+      {area === 'reliability' ? <ReliabilityApp workspaceId={activeWorkspace.id} role={activeWorkspace.role} /> : area === 'status' ? <StatusAdminApp workspaceId={activeWorkspace.id} role={activeWorkspace.role} /> : area === 'oncall' ? (
         <OncallApp
           workspaceId={activeWorkspace.id}
           workspaceName={activeWorkspace.name}

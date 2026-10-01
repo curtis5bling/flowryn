@@ -27,6 +27,11 @@ export const automationTriggerSchema = z.enum([
   'alert.opened',
   'alert.occurrenceAdded',
   'escalation.advanced',
+  'slo.breached',
+  'slo.recovered',
+  'slo.errorBudgetThresholdReached',
+  'monitor.failed',
+  'monitor.recovered',
 ]);
 export const automationFieldSchema = z.enum([
   'incident.severity',
@@ -156,7 +161,8 @@ export const automationActionSchema = z.discriminatedUnion('type', [
       severity: incidentSeveritySchema,
     })
     .strict(),
-]);
+  z.object({ ...base, type: z.literal('sli.ingest'), serviceId: incidentIdSchema, sloId: incidentIdSchema, good: z.number().int().min(0).max(1_000_000), total: z.number().int().min(1).max(1_000_000), metadata: z.record(z.string().regex(/^[a-zA-Z0-9_.-]{1,40}$/), z.string().max(100)).refine((v) => Object.keys(v).length <= 20).default({}) }).strict(),
+]).superRefine((action, context) => { if (action.type === 'sli.ingest' && action.good > action.total) context.addIssue({ code: 'custom', message: 'Good events cannot exceed total events' }); });
 export const automationRuleSchema = z
   .object({
     name: text(200),
@@ -191,6 +197,14 @@ export const automationPayloadSchema = z
     taskStatus: z.enum(['backlog', 'todo', 'in_progress', 'review', 'done']).optional(),
     assigneeId: incidentIdSchema.nullable().optional(),
     declaredAt: z.string().datetime().optional(),
+    serviceId: incidentIdSchema.optional(),
+    sloId: incidentIdSchema.optional(),
+    monitorId: incidentIdSchema.optional(),
+    sloVersion: z.number().int().positive().optional(),
+    windowStart: z.string().datetime().optional(),
+    windowEnd: z.string().datetime().optional(),
+    burnRate: z.number().nonnegative().max(1_000_000_000).optional(),
+    remainingBudget: z.number().min(0).max(1).optional(),
   })
   .strict();
 export type AutomationPayload = z.infer<typeof automationPayloadSchema>;
@@ -221,8 +235,8 @@ export const integrationInputSchema = z
     type: z.literal('genericWebhook'),
     status: z.enum(['active', 'disabled']),
     endpoint: z.string().url().max(2048).optional(),
-    inboundEvents: z.array(z.literal('alert.received')).max(1),
-    outboundEvents: z.array(automationTriggerSchema).max(15),
+    inboundEvents: z.array(z.enum(['alert.received', 'sli.received'])).max(2),
+    outboundEvents: z.array(automationTriggerSchema).max(automationTriggerSchema.options.length),
   })
   .strict();
 export type IntegrationInput = z.infer<typeof integrationInputSchema>;

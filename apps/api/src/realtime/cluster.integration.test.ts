@@ -14,7 +14,7 @@ import { UserModel } from '../models/User.js';
 import { WorkspaceMemberModel } from '../models/WorkspaceMember.js';
 
 import { Coordination, MemoryCoordinationNetwork } from './coordination.js';
-import { createRealtimeGateway, getPresence } from './gateway.js';
+import { createRealtimeGateway, getPresence, publishRealtimeEvent, relayAutomationHint } from './gateway.js';
 
 let mongo: MongoMemoryServer;
 let gateways: Server[];
@@ -75,6 +75,28 @@ it('propagates suspension and session revocation to the other process', async ()
   const revoked = waitEvent(sessionClient, 'disconnect');
   await revokeRefreshToken(tokens.refreshToken);
   await revoked;
+});
+
+it('routes every reliability event to its authorized audience with redacted payloads and no cross-workspace duplicates', async () => {
+  const f = await fixture();
+  const [owner, admin, foreign] = await UserModel.create([{ name: 'Owner', email: 'reliability-owner@test.dev', passwordHash: 'unused' }, { name: 'Admin', email: 'reliability-admin@test.dev', passwordHash: 'unused' }, { name: 'Foreign', email: 'reliability-foreign@test.dev', passwordHash: 'unused' }]);
+  await WorkspaceMemberModel.create([{ workspaceId, userId: owner!.id, role: 'owner' }, { workspaceId, userId: admin!.id, role: 'admin' }, { workspaceId: otherWorkspaceId, userId: foreign!.id, role: 'owner' }]);
+  const member = await connect(1, f.tokens.accessToken); const ownerClient = await connect(1, (await issueTokens(owner!.id)).accessToken); const adminClient = await connect(1, (await issueTokens(admin!.id)).accessToken); const foreignClient = await connect(1, (await issueTokens(foreign!.id)).accessToken);
+  for (const client of [member, ownerClient, adminClient]) expect((await join(client, 'workspace:join', workspaceId)).ok).toBe(true);
+  expect((await join(foreignClient, 'workspace:join', otherWorkspaceId)).ok).toBe(true);
+  const workspaceEvents = ['service.created', 'service.updated', 'service.archived', 'service.dependencyChanged', 'slo.created', 'slo.updated', 'slo.breached', 'slo.recovered', 'slo.errorBudgetThresholdReached', 'monitor.recovered', 'monitor.healthChanged'] as const;
+  for (const type of workspaceEvents) {
+    let foreignCount = 0; foreignClient.once(type, () => { foreignCount += 1; });
+    const received = new Promise<Record<string, unknown>>((resolve) => member.once(type, resolve));
+    publishRealtimeEvent({ workspaceId, actorId: f.user.id, entityId: f.project.id, type, payload: {} });
+    const event = await received; expect(event).toMatchObject({ workspaceId, type, payload: {} }); expect(JSON.stringify(event)).not.toMatch(/secret|authorization|header|body|address|stack|127\.0\.0\.1/i);
+    await new Promise((resolve) => setTimeout(resolve, 5)); expect(foreignCount).toBe(0);
+  }
+  let memberFailures = 0; let foreignFailures = 0; member.on('monitor.failed', () => { memberFailures += 1; }); foreignClient.on('monitor.failed', () => { foreignFailures += 1; });
+  const ownerFailure = new Promise<Record<string, unknown>>((resolve) => ownerClient.once('monitor.failed', resolve)); const adminFailure = new Promise<Record<string, unknown>>((resolve) => adminClient.once('monitor.failed', resolve));
+  await relayAutomationHint({ eventId: crypto.randomUUID(), timestamp: new Date().toISOString(), workspaceId, entityId: f.project.id, actorId: f.user.id, type: 'monitor.failed', payload: {} });
+  for (const event of await Promise.all([ownerFailure, adminFailure])) expect(JSON.stringify(event)).not.toMatch(/secret|authorization|header|body|address|stack|169\.254/i);
+  expect(memberFailures).toBe(0); expect(foreignFailures).toBe(0);
 });
 
 it('evicts workspace and project rooms remotely without disturbing other workspaces', async () => {

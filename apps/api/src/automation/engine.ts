@@ -22,6 +22,7 @@ import { NotificationModel } from '../models/Notification.js';
 import { TaskModel } from '../models/Task.js';
 import { claimEscalation, processEscalation, resumeSuppressedAlert } from '../oncall/escalation.js';
 import { createAlert } from '../oncall/service.js';
+import { ingestSliBatch, processDueSloEvaluation, processReliabilityWork } from '../reliability/service.js';
 import { configuredStatusDeliveryAdapter } from '../status/adapter.js';
 import { processStatusWork } from '../status/worker.js';
 
@@ -334,6 +335,10 @@ const domainAction = async (run: ClaimedRun, action: AutomationAction, session: 
       { session },
     );
     return run.id;
+  }
+  if (action.type === 'sli.ingest') {
+    await ingestSliBatch({ workspaceId, source: 'automation', sourceId: String(run.ruleId), session, batch: { samples: [{ serviceId: action.serviceId, sloId: action.sloId, timestamp: new Date().toISOString(), good: action.good, total: action.total, idempotencyKey: operationId, metadata: action.metadata }] } });
+    return action.sloId;
   }
   throw new IncidentError(400, 'Unsupported action');
 };
@@ -694,6 +699,8 @@ export class AutomationWorker {
   private wake?: () => void;
   private workKind = 0;
   private statusRunning = false;
+  private reliabilityRunning = false;
+  private reliabilitySloRunning = false;
   ready = false;
   constructor(
     readonly concurrency = 4,
@@ -736,6 +743,24 @@ export class AutomationWorker {
                   this.statusRunning = true;
                   return processStatusWork(new Date(), this.id, configuredStatusDeliveryAdapter())
                     .finally(() => { this.statusRunning = false; });
+                },
+          async () =>
+            this.reliabilityRunning
+              ? null
+              : () => {
+                  this.reliabilityRunning = true;
+                  return processReliabilityWork(new Date(), this.id)
+                    .then(() => undefined)
+                    .finally(() => { this.reliabilityRunning = false; });
+                },
+          async () =>
+            this.reliabilitySloRunning
+              ? null
+              : () => {
+                  this.reliabilitySloRunning = true;
+                  return processDueSloEvaluation(new Date(), this.id)
+                    .then(() => undefined)
+                    .finally(() => { this.reliabilitySloRunning = false; });
                 },
         ];
         let execute: (() => Promise<void>) | null = null;

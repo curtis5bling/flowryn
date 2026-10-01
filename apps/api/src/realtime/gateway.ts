@@ -50,7 +50,8 @@ export const relayAutomationHint = async (hint: AutomationHint) => {
   if (
     !hint.type.startsWith('automation.') &&
     !hint.type.startsWith('integration.') &&
-    hint.type !== 'escalation.deliveryFailed'
+    hint.type !== 'escalation.deliveryFailed' &&
+    hint.type !== 'monitor.failed'
   ) {
     const audience = audiences[hint.type];
     if (
@@ -131,6 +132,18 @@ const audiences: Record<
   'comment.created': 'project',
   'comment.updated': 'project',
   'comment.deleted': 'project',
+  'service.created': 'workspace',
+  'service.updated': 'workspace',
+  'service.archived': 'workspace',
+  'service.dependencyChanged': 'workspace',
+  'slo.created': 'workspace',
+  'slo.updated': 'workspace',
+  'slo.breached': 'workspace',
+  'slo.recovered': 'workspace',
+  'slo.errorBudgetThresholdReached': 'workspace',
+  'monitor.failed': 'private',
+  'monitor.recovered': 'workspace',
+  'monitor.healthChanged': 'workspace',
 };
 
 export const publishRealtimeEvent = (
