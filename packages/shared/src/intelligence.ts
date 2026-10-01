@@ -7,7 +7,7 @@ export const intelligenceBandSchema = z.enum(['low', 'medium', 'high', 'critical
 export const recommendationStateSchema = z.enum(['open', 'accepted', 'dismissed', 'snoozed', 'completed', 'stale']);
 export const recommendationTypeSchema = z.enum(['reviewAlert', 'joinIncident', 'assignIncidentCommander', 'reviewSlo', 'investigateMonitor', 'retryDeadLetter', 'assignServiceOwner', 'reviewTask', 'linkService', 'reviewCoverageGap', 'reviewMaintenance']);
 const mongoId = z.string().regex(/^[a-f\d]{24}$/i);
-export const factorWeightsSchema = z.object({ severity: z.number().int().min(0).max(30), urgency: z.number().int().min(0).max(25), criticality: z.number().int().min(0).max(20), impact: z.number().int().min(0).max(15), confidence: z.number().int().min(0).max(10) }).refine((v) => Object.values(v).reduce((s, n) => s + n, 0) === 100, 'Weights must total 100');
+export const factorWeightsSchema = z.object({ severity: z.number().int().min(0).max(100), urgency: z.number().int().min(0).max(100), criticality: z.number().int().min(0).max(100), impact: z.number().int().min(0).max(100), confidence: z.number().int().min(0).max(100) }).refine((v) => Object.values(v).reduce((s, n) => s + n, 0) === 100, 'Weights must total 100');
 export const intelligencePolicyInputSchema = z.object({
   name: z.string().trim().min(2).max(100), weights: factorWeightsSchema,
   thresholds: z.object({ now: z.number().int().min(1).max(100), soon: z.number().int().min(0).max(99) }).refine((v) => v.now > v.soon, 'Now must exceed soon'),

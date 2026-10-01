@@ -171,6 +171,7 @@ function App() {
     enabled: Boolean(me.data),
   });
   const [area, setArea] = useState<'projects' | 'incidents' | 'automation' | 'oncall' | 'status' | 'reliability' | 'intelligence'>('projects');
+  const [sourceTarget, setSourceTarget] = useState('');
   const [authMode, setAuthMode] = useState<AuthMode>('login');
   const [showOnboarding, setShowOnboarding] = useState(false);
   const logoutMutation = useMutation({
@@ -225,13 +226,14 @@ function App() {
         <button aria-pressed={area === 'reliability'} onClick={() => setArea('reliability')}>Reliability</button>
         <button aria-pressed={area === 'intelligence'} onClick={() => setArea('intelligence')}>Priorities</button>
       </nav>
-      {area === 'intelligence' ? <IntelligenceApp workspaceId={activeWorkspace.id} role={activeWorkspace.role} onNavigate={(deepLink) => { window.history.replaceState({}, '', deepLink); setArea(deepLink.startsWith('/incidents') ? 'incidents' : deepLink.startsWith('/oncall') ? 'oncall' : deepLink.startsWith('/reliability') ? 'reliability' : deepLink.startsWith('/automation') ? 'automation' : deepLink.startsWith('/status') ? 'status' : 'projects'); }} /> : area === 'reliability' ? <ReliabilityApp workspaceId={activeWorkspace.id} role={activeWorkspace.role} /> : area === 'status' ? <StatusAdminApp workspaceId={activeWorkspace.id} role={activeWorkspace.role} /> : area === 'oncall' ? (
+      {area === 'intelligence' ? <IntelligenceApp workspaceId={activeWorkspace.id} role={activeWorkspace.role} onNavigate={(deepLink) => { window.history.replaceState({}, '', deepLink); setSourceTarget(deepLink); setArea(deepLink.startsWith('/incidents') ? 'incidents' : deepLink.startsWith('/oncall') ? 'oncall' : deepLink.startsWith('/reliability') ? 'reliability' : deepLink.startsWith('/automation') ? 'automation' : deepLink.startsWith('/status') ? 'status' : 'projects'); }} /> : area === 'reliability' ? <ReliabilityApp workspaceId={activeWorkspace.id} role={activeWorkspace.role} initialServiceId={new URL(sourceTarget || '/', window.location.origin).searchParams.get('service') ?? undefined} initialMonitorId={new URL(sourceTarget || '/', window.location.origin).searchParams.get('monitor') ?? undefined} /> : area === 'status' ? <StatusAdminApp workspaceId={activeWorkspace.id} role={activeWorkspace.role} /> : area === 'oncall' ? (
         <OncallApp
           workspaceId={activeWorkspace.id}
           workspaceName={activeWorkspace.name}
           userId={me.data.user.id}
           role={activeWorkspace.role}
           onLogout={() => logoutMutation.mutate()}
+          initialAlertId={new URL(sourceTarget || '/', window.location.origin).searchParams.get('alert') ?? undefined}
         />
       ) : area === 'automation' ? (
         <AutomationApp
@@ -247,6 +249,7 @@ function App() {
           userId={me.data.user.id}
           role={activeWorkspace.role}
           onLogout={() => logoutMutation.mutate()}
+          initialIncidentId={sourceTarget.startsWith('/incidents/') ? sourceTarget.split('/')[2]?.split('?')[0] : undefined}
         />
       ) : (
         <WorkspaceApp
@@ -254,6 +257,7 @@ function App() {
           workspaceName={activeWorkspace.name}
           userName={me.data.user.name}
           onLogout={() => logoutMutation.mutate()}
+          initialProjectId={sourceTarget.startsWith('/projects/') ? sourceTarget.split('/')[2]?.split('?')[0] : undefined}
         />
       )}
     </>

@@ -10,7 +10,7 @@ const signal = new Schema({
   workspaceId: oid, sourceType: { type: String, required: true }, sourceId: { type: String, required: true, maxlength: 160 }, deduplicationKey: { type: String, required: true, maxlength: 240 },
   serviceId: Schema.Types.ObjectId, projectId: Schema.Types.ObjectId, incidentId: Schema.Types.ObjectId, alertId: Schema.Types.ObjectId, taskId: Schema.Types.ObjectId, sloId: Schema.Types.ObjectId,
   assigneeIds: [Schema.Types.ObjectId], state: { type: String, enum: ['active', 'resolved', 'stale'], default: 'active' }, severity: String, urgency: String, impact: String, confidence: String,
-  detectedAt: Date, lastObservedAt: Date, resolvedAt: Date, sourceRevision: { type: String, required: true }, facts: Schema.Types.Mixed,
+  detectedAt: Date, lastObservedAt: Date, resolvedAt: Date, sourceRevision: { type: String, required: true }, scoreRevision: String, facts: Schema.Types.Mixed,
   score: { type: Number, min: 0, max: 100 }, scoreGroup: { type: String, enum: ['now', 'soon', 'watch'] }, factors: [factor], explanation: { type: String, maxlength: 600 }, policyVersion: Number,
   observationVersion: { type: Number, default: 1 }, expiresAt: Date,
 }, { timestamps: true });

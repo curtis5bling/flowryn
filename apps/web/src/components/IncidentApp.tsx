@@ -23,16 +23,18 @@ export function IncidentApp({
   userId,
   role,
   onLogout,
+  initialIncidentId,
 }: {
   workspaceId: string;
   workspaceName: string;
   userId: string;
   role: string;
   onLogout: () => void;
+  initialIncidentId?: string;
 }) {
   const client = useQueryClient();
   const [view, setView] = useState<'incidents' | 'declare' | 'runbooks'>('incidents');
-  const [selectedId, setSelected] = useState<string>();
+  const [selectedId, setSelected] = useState<string | undefined>(initialIncidentId);
   const [editing, setEditing] = useState<Runbook | 'new'>();
   const [filters, setFilters] = useState<Record<string, string>>({ page: '1', archived: 'false' });
   const [bookPage, setBookPage] = useState(1);

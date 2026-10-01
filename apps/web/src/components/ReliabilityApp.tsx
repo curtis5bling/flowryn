@@ -12,13 +12,13 @@ function SloRow({ workspaceId, slo, canManage }: { workspaceId: string; slo: { _
   const value = evaluation.data?.evaluation;
   return <li><strong>{slo.name}</strong><span>{slo.objectiveTarget}% over {slo.rollingWindowDays} days</span><span>{evaluation.isLoading ? 'Calculating…' : evaluation.isError ? 'Unavailable' : value?.state === 'unknown' ? 'Unknown — insufficient data' : '' + value?.state + ': ' + ((value?.compliance ?? 0) * 100).toFixed(3) + '%; ' + ((value?.remainingBudget ?? 0) * 100).toFixed(1) + '% budget remaining'}</span>{canManage && <label>Edit target percent<input aria-label={'Target for ' + slo.name} type="number" min="0.001" max="99.999999" value={target} onChange={(event) => setTarget(Number(event.target.value))} /><button type="button" disabled={save.isPending} onClick={() => save.mutate()}>Save objective</button></label>}{save.isError && <p role="alert">Objective update failed.</p>}<details><summary>Burn-rate history</summary>{history.isError ? <p role="alert">Burn-rate history unavailable.</p> : history.data?.evaluations.length ? <ol>{history.data.evaluations.map((item) => <li key={item._id}>{item.windowEnd}: short {item.shortBurnRate ?? 'unknown'}, long {item.longBurnRate ?? 'unknown'}</li>)}</ol> : <p>No evaluation history.</p>}</details></li>;
 }
-export function ReliabilityApp({ workspaceId, role }: { workspaceId: string; role: string }) {
+export function ReliabilityApp({ workspaceId, role, initialServiceId, initialMonitorId }: { workspaceId: string; role: string; initialServiceId?: string; initialMonitorId?: string }) {
   const client = useQueryClient(); const canManage = role === 'owner' || role === 'admin';
-  const [name, setName] = useState(''); const [slug, setSlug] = useState(''); const [selected, setSelected] = useState('');
+  const [name, setName] = useState(''); const [slug, setSlug] = useState(''); const [selected, setSelected] = useState(initialServiceId ?? '');
   const [servicePage, setServicePage] = useState(1);
   const [sloName, setSloName] = useState('Availability'); const [sloTarget, setSloTarget] = useState(99.9); const [sloWindow, setSloWindow] = useState<7 | 28 | 30 | 90>(30);
   const [monitorPage, setMonitorPage] = useState(1);
-  const [online, setOnline] = useState(() => navigator.onLine); const [reconnecting, setReconnecting] = useState(false); const [selectedMonitor, setSelectedMonitor] = useState('');
+  const [online, setOnline] = useState(() => navigator.onLine); const [reconnecting, setReconnecting] = useState(false); const [selectedMonitor, setSelectedMonitor] = useState(initialMonitorId ?? '');
   useEffect(() => { const up = () => { setOnline(true); setReconnecting(true); void client.invalidateQueries({ predicate: (query) => String(query.queryKey[0]).startsWith('reliability-') }).finally(() => setReconnecting(false)); }; const down = () => setOnline(false); window.addEventListener('online', up); window.addEventListener('offline', down); return () => { window.removeEventListener('online', up); window.removeEventListener('offline', down); }; }, [client]);
   const [monitorUrl, setMonitorUrl] = useState('https://'); const [monitorEnabled, setMonitorEnabled] = useState(false);
   const [secretHeader, setSecretHeader] = useState('authorization'); const [secretValue, setSecretValue] = useState('');

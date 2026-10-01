@@ -10,7 +10,7 @@ The allowlisted conditions are overdue and blocked tasks, active severity-one/tw
 
 ## Scoring and policies
 
-Scores are the rounded sum of five normalized values multiplied by policy weights: severity (maximum 30), urgency (25), service criticality (20), impact (15), and confidence (10). Values and contributions are clamped by schemas and the result is clamped to 0–100. Stable ordering is score descending, detection time ascending, then object ID. Dependency influence uses the reliability domain's bounded graph rather than accepting formulas.
+Scores are the rounded sum of five normalized values multiplied by policy weights. The default vector is severity 30, urgency 25, service criticality 20, impact 15, and confidence 10. Each configurable weight is bounded from 0 through 100 and the vector must total 100. Values and contributions are clamped by schemas and the result is clamped to 0–100. Stable ordering is score descending, detection time ascending, then object ID. Dependency influence uses the reliability domain's bounded graph rather than accepting formulas.
 
 The default weights total 100. Policy inputs contain only validated numbers, enums, and bounded arrays. Owners and administrators create immutable versions, then activate or roll back with the version they read and a UUID operation. Members can read the active policy. Existing signal snapshots keep the policy version and complete factors, so activation does not rewrite history.
 

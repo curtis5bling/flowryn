@@ -95,9 +95,9 @@ export function NotificationCenter({ workspaceId }: { workspaceId: string }) {
   </div>;
 }
 
-export function WorkspaceApp({ workspaceId, workspaceName, userName, onLogout }: { workspaceId: string; workspaceName: string; userName: string; onLogout: () => void }) {
+export function WorkspaceApp({ workspaceId, workspaceName, userName, onLogout, initialProjectId }: { workspaceId: string; workspaceName: string; userName: string; onLogout: () => void; initialProjectId?: string }) {
   const queryClient = useQueryClient();
-  const [selectedProjectId, setSelectedProjectId] = useState('');
+  const [selectedProjectId, setSelectedProjectId] = useState(initialProjectId ?? '');
   const [dialog, setDialog] = useState<'project' | 'task' | 'edit-project' | 'edit-task' | null>(null);
   const [editingTask, setEditingTask] = useState<Task>();
   const [filters, setFilters] = useState<TaskFilters>({});
