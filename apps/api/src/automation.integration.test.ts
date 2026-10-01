@@ -187,7 +187,7 @@ describe('durable reliability monitor execution', () => {
     const x = await monitorFixture();
     const expiredAt = new Date(x.due.getTime() - 1);
     const key = createHash('sha256').update(`${x.monitor.id}:${x.due.toISOString()}`).digest('hex');
-    const run = await SyntheticMonitorRunModel.create({ workspaceId: x.f.workspace.id, serviceId: x.service._id, monitorId: x.monitor._id, scheduledAt: x.due, idempotencyKey: key, status: 'running', attemptCount: 1, startedAt: expiredAt, leaseOwner: 'crashed-worker', leaseExpiresAt: expiredAt });
+    const run = await SyntheticMonitorRunModel.create({ workspaceId: x.f.workspace.id, serviceId: x.service._id, monitorId: x.monitor._id, configVersion: 1, scheduledAt: x.due, idempotencyKey: key, status: 'running', attemptCount: 1, startedAt: expiredAt, leaseOwner: 'crashed-worker', leaseExpiresAt: expiredAt });
     await SyntheticMonitorModel.updateOne({ _id: x.monitor._id }, { $set: { leaseOwner: 'crashed-worker', leaseExpiresAt: expiredAt } });
 
     const response = await request(app).post(`/api/workspaces/${x.f.workspace.id}/reliability/monitors/${x.monitor.id}/test`).set('Cookie', await x.f.cookie()).send({});
@@ -276,7 +276,7 @@ describe('durable reliability monitor execution', () => {
 
   it('authorizes one administrative dead-letter retry and rejects concurrent or member retries', async () => {
     const x = await monitorFixture();
-    const run = await SyntheticMonitorRunModel.create({ workspaceId: x.f.workspace.id, serviceId: x.service._id, monitorId: x.monitor._id, scheduledAt: x.due, idempotencyKey: 'dead-letter:stable', status: 'deadLetter', attemptCount: 5, completedAt: x.due, errorCode: 'MONITOR_INFRASTRUCTURE_FAILURE' });
+    const run = await SyntheticMonitorRunModel.create({ workspaceId: x.f.workspace.id, serviceId: x.service._id, monitorId: x.monitor._id, scheduledAt: x.due, idempotencyKey: 'dead-letter:stable', configVersion: 1, status: 'deadLetter', attemptCount: 5, completedAt: x.due, errorCode: 'MONITOR_INFRASTRUCTURE_FAILURE' });
     const url = `/api/workspaces/${x.f.workspace.id}/reliability/monitors/${x.monitor.id}/runs/${run.id}/retry`;
     expect((await request(app).post(url).set('Cookie', await x.f.cookie(x.f.member)).send({})).status).toBe(403);
     const cookie = await x.f.cookie(x.f.owner);
@@ -285,10 +285,20 @@ describe('durable reliability monitor execution', () => {
     expect(await SyntheticMonitorRunModel.countDocuments({ _id: run._id, status: 'retrying' })).toBe(1);
   });
 
+  it('rejects a dead-letter retry after the monitor configuration changes', async () => {
+    const x = await monitorFixture(); const cookie = await x.f.cookie();
+    const run = await SyntheticMonitorRunModel.create({ workspaceId: x.f.workspace.id, serviceId: x.service._id, monitorId: x.monitor._id, configVersion: 1, scheduledAt: x.due, idempotencyKey: 'dead-letter:stale-configuration', status: 'deadLetter', attemptCount: 5, completedAt: x.due, errorCode: 'MONITOR_INFRASTRUCTURE_FAILURE' });
+    const base = `/api/workspaces/${x.f.workspace.id}/reliability/monitors/${x.monitor.id}`;
+    await request(app).patch(base).set('Cookie', cookie).send({ url: 'https://changed.company.com' }).expect(200);
+
+    expect((await request(app).post(`${base}/runs/${run.id}/retry`).set('Cookie', cookie).send({})).status).toBe(409);
+    expect(await SyntheticMonitorRunModel.findById(run._id)).toMatchObject({ configVersion: 1, status: 'deadLetter', serviceId: x.service._id });
+  });
+
   it('fences administrative retries when disable or archive wins and rechecks before execution', async () => {
     for (const transition of ['disable', 'archive'] as const) {
       const x = await monitorFixture();
-      const run = await SyntheticMonitorRunModel.create({ workspaceId: x.f.workspace.id, serviceId: x.service._id, monitorId: x.monitor._id, scheduledAt: x.due, idempotencyKey: `admin-race:${transition}`, status: 'deadLetter', attemptCount: 5, completedAt: x.due, errorCode: 'MONITOR_INFRASTRUCTURE_FAILURE' });
+      const run = await SyntheticMonitorRunModel.create({ workspaceId: x.f.workspace.id, serviceId: x.service._id, monitorId: x.monitor._id, scheduledAt: x.due, idempotencyKey: `admin-race:${transition}`, configVersion: 1, status: 'deadLetter', attemptCount: 5, completedAt: x.due, errorCode: 'MONITOR_INFRASTRUCTURE_FAILURE' });
       const base = `/api/workspaces/${x.f.workspace.id}/reliability/monitors/${x.monitor.id}`; const cookie = await x.f.cookie();
       if (transition === 'disable') await request(app).patch(base).set('Cookie', cookie).send({ enabled: false }).expect(200);
       else await request(app).delete(base).set('Cookie', cookie).expect(204);
@@ -298,7 +308,7 @@ describe('durable reliability monitor execution', () => {
     }
 
     const retryFirst = await monitorFixture();
-    const run = await SyntheticMonitorRunModel.create({ workspaceId: retryFirst.f.workspace.id, serviceId: retryFirst.service._id, monitorId: retryFirst.monitor._id, scheduledAt: retryFirst.due, idempotencyKey: 'admin-race:retry-first', status: 'deadLetter', attemptCount: 5, completedAt: retryFirst.due, errorCode: 'MONITOR_INFRASTRUCTURE_FAILURE' });
+    const run = await SyntheticMonitorRunModel.create({ workspaceId: retryFirst.f.workspace.id, serviceId: retryFirst.service._id, monitorId: retryFirst.monitor._id, scheduledAt: retryFirst.due, idempotencyKey: 'admin-race:retry-first', configVersion: 1, status: 'deadLetter', attemptCount: 5, completedAt: retryFirst.due, errorCode: 'MONITOR_INFRASTRUCTURE_FAILURE' });
     const base = `/api/workspaces/${retryFirst.f.workspace.id}/reliability/monitors/${retryFirst.monitor.id}`; const cookie = await retryFirst.f.cookie();
     await request(app).post(`${base}/runs/${run.id}/retry`).set('Cookie', cookie).send({}).expect(202);
     await request(app).patch(base).set('Cookie', cookie).send({ enabled: false }).expect(200);
@@ -310,7 +320,7 @@ describe('durable reliability monitor execution', () => {
   it('keeps one stable execution when dead-letter retry races a worker claim and a lease expires', async () => {
     const x = await monitorFixture();
     const stableKey = createHash('sha256').update(`${x.monitor.id}:${x.due.toISOString()}`).digest('hex');
-    const run = await SyntheticMonitorRunModel.create({ workspaceId: x.f.workspace.id, serviceId: x.service._id, monitorId: x.monitor._id, scheduledAt: x.due, idempotencyKey: stableKey, status: 'deadLetter', attemptCount: 5, completedAt: x.due, errorCode: 'MONITOR_INFRASTRUCTURE_FAILURE', leaseExpiresAt: new Date(x.due.getTime() - 1) });
+    const run = await SyntheticMonitorRunModel.create({ workspaceId: x.f.workspace.id, serviceId: x.service._id, monitorId: x.monitor._id, scheduledAt: x.due, idempotencyKey: stableKey, configVersion: 1, status: 'deadLetter', attemptCount: 5, completedAt: x.due, errorCode: 'MONITOR_INFRASTRUCTURE_FAILURE', leaseExpiresAt: new Date(x.due.getTime() - 1) });
     let calls = 0; const network = async () => { calls += 1; return { statusCode: 200, latencyMs: 5, body: 'ok' }; };
     const retry = request(app).post(`/api/workspaces/${x.f.workspace.id}/reliability/monitors/${x.monitor.id}/runs/${run.id}/retry`).set('Cookie', await x.f.cookie()).send({});
     const [, response] = await Promise.all([processReliabilityWork(x.due, 'racing-worker', network), retry]);

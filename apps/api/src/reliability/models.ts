@@ -41,7 +41,7 @@ monitorSchema.index({ enabled: 1, archivedAt: 1, nextRunAt: 1, leaseExpiresAt: 1
 monitorSchema.index({ workspaceId: 1, serviceId: 1, archivedAt: 1 });
 export const SyntheticMonitorModel = model('SyntheticMonitor', monitorSchema);
 
-const runSchema = new Schema({ workspaceId: objectId, serviceId: objectId, monitorId: objectId, scheduledAt: Date, idempotencyKey: String, status: { type: String, enum: ['queued', 'running', 'completed', 'retrying', 'deadLetter'] }, endpointHealthy: Boolean, statusCode: Number, latencyMs: Number, errorCode: String, attemptCount: { type: Number, default: 0 }, nextAttemptAt: Date, leaseOwner: String, leaseExpiresAt: Date, startedAt: Date, completedAt: Date }, { timestamps: true });
+const runSchema = new Schema({ workspaceId: objectId, serviceId: objectId, monitorId: objectId, configVersion: Number, scheduledAt: Date, idempotencyKey: String, status: { type: String, enum: ['queued', 'running', 'completed', 'retrying', 'deadLetter'] }, endpointHealthy: Boolean, statusCode: Number, latencyMs: Number, errorCode: String, attemptCount: { type: Number, default: 0 }, nextAttemptAt: Date, leaseOwner: String, leaseExpiresAt: Date, startedAt: Date, completedAt: Date }, { timestamps: true });
 runSchema.index({ monitorId: 1, idempotencyKey: 1 }, { unique: true });
 runSchema.index({ workspaceId: 1, monitorId: 1, scheduledAt: -1 });
 runSchema.index({ status: 1, nextAttemptAt: 1, leaseExpiresAt: 1 });
