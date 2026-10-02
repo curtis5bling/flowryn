@@ -6,6 +6,7 @@ import mongoose from 'mongoose';
 import { AutomationRunModel, OutboxEventModel } from '../automation/models.js';
 import { automationActorId } from '../automation/principal.js';
 import { IncidentModel } from '../models/Incident.js';
+import { ProjectModel } from '../models/Project.js';
 import { TaskModel } from '../models/Task.js';
 import { UserModel } from '../models/User.js';
 import { WorkspaceModel } from '../models/Workspace.js';
@@ -28,7 +29,7 @@ type Classification = 'low' | 'medium' | 'high' | 'critical' | 'unknown';
 const levels: Record<Classification, number> = { unknown: .5, low: .2, medium: .5, high: .75, critical: 1 };
 export const calculateScore = (input: { severity: Classification; urgency: Classification; criticality?: keyof IntelligencePolicyInput['criticality']; impact: Classification; confidence: Classification }, policy: IntelligencePolicyInput) => {
   const values = { severity: levels[input.severity], urgency: levels[input.urgency], criticality: input.criticality ? policy.criticality[input.criticality] : .5, impact: levels[input.impact], confidence: levels[input.confidence] };
-  const factors = (Object.keys(values) as Array<keyof typeof values>).map((key) => ({ key, value: values[key], weight: policy.weights[key], contribution: Math.round(values[key] * policy.weights[key] * 100) / 100, explanation: `${key} contributes ${Math.round(values[key] * policy.weights[key] * 100) / 100} points`, unknown: key === 'criticality' && !input.criticality }));
+  const factors = (Object.keys(values) as Array<keyof typeof values>).map((key) => ({ key, value: values[key], weight: policy.weights[key], contribution: Math.round(values[key] * policy.weights[key] * 100) / 100, explanation: `${key} contributes ${Math.round(values[key] * policy.weights[key] * 100) / 100} points`, unknown: key === 'criticality' ? !input.criticality : input[key] === 'unknown' }));
   const score = Math.max(0, Math.min(100, Math.round(factors.reduce((sum, factor) => sum + factor.contribution, 0))));
   return { score, factors, group: score >= policy.thresholds.now ? 'now' : score >= policy.thresholds.soon ? 'soon' : 'watch', explanation: factors.map((f) => f.explanation).join('; ') } as const;
 };
@@ -38,7 +39,7 @@ const safeDate = (value: unknown) => value instanceof Date ? value.toISOString()
 const candidatesFor = async (workspaceId: string, now: Date, target?: { type: string; id: string }): Promise<{ items: Candidate[]; incompleteTypes: Set<string> }> => {
   const byId = (...types: string[]) => target ? types.includes(target.type) ? { _id: target.id } : { _id: null } : {};
   const bySlo = target ? ['slo.breached', 'slo.budgetDepleted'].includes(target.type) ? { sloId: new mongoose.Types.ObjectId(target.id) } : { sloId: null } : {};
-  const [tasks, incidents, alerts, evaluations, monitors, monitorDead, automationDead, schedules, maintenance, services, memberIds, activeSlos, activeMonitorIds] = await Promise.all([
+  const [taskCandidates, incidents, alerts, evaluations, monitors, monitorDead, automationDead, schedules, maintenance, services, memberIds, activeSlos, activeMonitorIds] = await Promise.all([
     TaskModel.find({ workspaceId, ...byId('task.overdue', 'task.blocked'), status: { $ne: 'done' }, $or: [{ dueDate: { $lt: now } }, { blocked: true }] }).select('_id projectId assigneeId priority blocked dueDate updatedAt').sort({ dueDate: 1, priority: -1, _id: 1 }).limit(target ? 1 : 500).lean(),
     IncidentModel.find({ workspaceId, ...byId('incident.highSeverity'), archivedAt: null, status: { $ne: 'resolved' }, severity: { $in: ['sev1', 'sev2'] } }).select('_id severity commanderId responderIds linkedProjectIds declaredAt acknowledgedAt updatedAt').sort({ severity: 1, declaredAt: 1, _id: 1 }).limit(target ? 1 : 500).lean(),
     AlertModel.find({ workspaceId, ...byId('alert.unacknowledged', 'alert.escalating'), status: 'open' }).select('_id severity serviceId projectId escalationPolicyId createdAt updatedAt').sort({ severity: 1, createdAt: 1, _id: 1 }).limit(target ? 1 : 500).lean(),
@@ -53,6 +54,9 @@ const candidatesFor = async (workspaceId: string, now: Date, target?: { type: st
     ServiceLevelObjectiveModel.find({ workspaceId, ...byId('slo.breached', 'slo.budgetDepleted'), archivedAt: null, enabled: true }).select('_id version').limit(target ? 1 : 500).lean(),
     SyntheticMonitorModel.find({ workspaceId, ...(target?.type === 'monitor.deadLetter' ? {} : byId('monitor.repeatedFailure')), archivedAt: null, enabled: true }).distinct('_id'),
   ]);
+  const activeProjectIds = await ProjectModel.find({ workspaceId, _id: { $in: taskCandidates.map((task) => task.projectId) }, status: 'active' }).distinct('_id');
+  const activeProjectSet = new Set(activeProjectIds.map(String));
+  const tasks = taskCandidates.filter((task) => activeProjectSet.has(String(task.projectId)));
   const linkedServiceIds = [...new Set([...alerts.map((item) => item.serviceId), ...evaluations.map((item) => item.serviceId), ...monitors.map((item) => item.serviceId)].filter((id) => mongoose.isValidObjectId(id)).map(String))];
   const linkedServices = await ServiceModel.find({ workspaceId, _id: { $in: linkedServiceIds } }).select('_id criticality version updatedAt').limit(1500).lean();
   const serviceById = new Map(linkedServices.map((service) => [String(service._id), service]));
@@ -71,7 +75,7 @@ const candidatesFor = async (workspaceId: string, now: Date, target?: { type: st
   for (const x of services) if (!(x.ownerIds ?? []).some((id) => memberSet.has(String(id)))) result.push({ type: 'service.ownerlessCritical', id: String(x._id), revision: `${x.version}:${safeDate(x.updatedAt)}:${membershipRevision}`, severity: x.criticality === 'tier1' ? 'critical' : 'high', urgency: 'high', criticality: x.criticality as 'tier1'|'tier2', impact: 'critical', confidence: 'high', refs: { serviceId: x._id, projectId: x.projectIds?.[0] }, facts: { criticality: x.criticality ?? 'unknown' }, recommendation: 'assignServiceOwner', link: `/reliability?service=${x._id}` });
   const incompleteTypes = new Set<string>();
   const mark = (full: boolean, ...types: IntelligenceSignalType[]) => { if (full) types.forEach((type) => incompleteTypes.add(type)); };
-  mark(tasks.length === 500, 'task.overdue', 'task.blocked'); mark(incidents.length === 500, 'incident.highSeverity'); mark(alerts.length === 500, 'alert.unacknowledged', 'alert.escalating'); mark(evaluations.length > 500 || activeSlos.length === 500, 'slo.breached', 'slo.budgetDepleted'); mark(monitors.length === 500, 'monitor.repeatedFailure'); mark(monitorDead.length === 500, 'monitor.deadLetter'); mark(automationDead.truncated, 'automation.deadLetter'); mark(schedules.length === 200 || overrides.length === 1000, 'oncall.coverageGap'); mark(maintenance.length === 500, 'maintenance.upcoming', 'maintenance.overdue'); mark(services.length === 500, 'service.ownerlessCritical');
+  mark(taskCandidates.length === 500, 'task.overdue', 'task.blocked'); mark(incidents.length === 500, 'incident.highSeverity'); mark(alerts.length === 500, 'alert.unacknowledged', 'alert.escalating'); mark(evaluations.length > 500 || activeSlos.length === 500, 'slo.breached', 'slo.budgetDepleted'); mark(monitors.length === 500, 'monitor.repeatedFailure'); mark(monitorDead.length === 500, 'monitor.deadLetter'); mark(automationDead.truncated, 'automation.deadLetter'); mark(schedules.length === 200 || overrides.length === 1000, 'oncall.coverageGap'); mark(maintenance.length === 500, 'maintenance.upcoming', 'maintenance.overdue'); mark(services.length === 500, 'service.ownerlessCritical');
   if (result.length > 2000) intelligenceSignalTypes.forEach((type) => incompleteTypes.add(type));
   return { items: result, incompleteTypes };
 };
