@@ -259,6 +259,7 @@ function App() {
           userName={me.data.user.name}
           onLogout={() => logoutMutation.mutate()}
           initialProjectId={sourceTarget.startsWith('/projects/') ? sourceTarget.split('/')[2]?.split('?')[0] : undefined}
+          initialTaskId={new URL(sourceTarget || '/', window.location.origin).searchParams.get('task') ?? undefined}
         />
       )}
     </>
