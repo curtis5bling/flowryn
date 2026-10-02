@@ -37,6 +37,6 @@ const feedback = new Schema({ workspaceId: oid, recommendationId: oid, operation
 feedback.index({ workspaceId: 1, operationId: 1 }, { unique: true });
 export const IntelligenceFeedbackModel = model('IntelligenceFeedback', feedback);
 
-const checkpoint = new Schema({ _id: String, cursor: Schema.Types.ObjectId, lastRunAt: Date, leaseOwner: String, leaseExpiresAt: Date }, { timestamps: true });
+const checkpoint = new Schema({ _id: String, cursor: Schema.Types.ObjectId, cursors: Schema.Types.Mixed, lastRunAt: Date, leaseOwner: String, leaseExpiresAt: Date }, { timestamps: true });
 export const IntelligenceCheckpointModel = model('IntelligenceCheckpoint', checkpoint);
 export const intelligenceModels = [IntelligencePolicyModel, OperationalSignalModel, IntelligenceScoreSnapshotModel, IntelligenceRecommendationModel, IntelligenceEvaluationModel, IntelligenceFeedbackModel, IntelligenceCheckpointModel];
