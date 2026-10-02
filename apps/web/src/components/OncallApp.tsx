@@ -1041,6 +1041,7 @@ export function OncallApp({
   userId,
   onLogout,
   initialAlertId,
+  initialScheduleId,
 }: {
   workspaceId: string;
   workspaceName: string;
@@ -1048,11 +1049,12 @@ export function OncallApp({
   userId: string;
   onLogout: () => void;
   initialAlertId?: string;
+  initialScheduleId?: string;
 }) {
   const admin = ['owner', 'admin'].includes(role);
   const queryClient = useQueryClient();
   const [tab, setTab] = useState<'schedules' | 'policies' | 'routing' | 'alerts' | 'metrics'>(
-    'alerts',
+    initialScheduleId ? 'schedules' : 'alerts',
   );
   const [page, setPage] = useState(1);
   const [refPage, setRefPage] = useState(1);
@@ -1061,7 +1063,7 @@ export function OncallApp({
     resource: 'schedules' | 'policies' | 'routing';
     item?: Schedule | EscalationPolicy | RoutingRule;
   } | null>(null);
-  const [selectedSchedule, setSelectedSchedule] = useState('');
+  const [selectedSchedule, setSelectedSchedule] = useState(initialScheduleId ?? '');
   const [selectedAlert, setSelectedAlert] = useState(initialAlertId ?? '');
   const [create, setCreate] = useState(false);
   const [status, setStatus] = useState('');

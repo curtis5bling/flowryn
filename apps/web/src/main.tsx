@@ -234,6 +234,7 @@ function App() {
           role={activeWorkspace.role}
           onLogout={() => logoutMutation.mutate()}
           initialAlertId={new URL(sourceTarget || '/', window.location.origin).searchParams.get('alert') ?? undefined}
+          initialScheduleId={new URL(sourceTarget || '/', window.location.origin).searchParams.get('schedule') ?? undefined}
         />
       ) : area === 'automation' ? (
         <AutomationApp
