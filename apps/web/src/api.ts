@@ -27,6 +27,7 @@ export type TaskFilters = { status?: string; priority?: string; assigneeId?: str
 export type Page<T> = { items: T[]; pagination: { page: number; limit: number; total: number; pages: number } };
 
 export const listProjects = (workspaceId: string, page?: number) => request<Page<ProjectSummary>>(`/api/workspaces/${workspaceId}/projects${page ? `?page=${page}&limit=100` : ''}`);
+export const getProject = (workspaceId: string, projectId: string) => request<{ project: ProjectSummary }>(`/api/workspaces/${workspaceId}/projects/${projectId}`);
 export const createProject = (workspaceId: string, body: { name: string; description: string; color: string }) => request<{ project: Project }>(`/api/workspaces/${workspaceId}/projects`, { method: 'POST', body: JSON.stringify(body) });
 export const updateProject = (workspaceId: string, projectId: string, body: Partial<{ name: string; description: string; color: string }>) => request<{ project: Project }>(`/api/workspaces/${workspaceId}/projects/${projectId}`, { method: 'PATCH', body: JSON.stringify(body) });
 export const archiveProject = (workspaceId: string, projectId: string) => request<{ project: Project }>(`/api/workspaces/${workspaceId}/projects/${projectId}`, { method: 'DELETE' });

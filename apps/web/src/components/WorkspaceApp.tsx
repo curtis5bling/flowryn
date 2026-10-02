@@ -2,7 +2,7 @@ import type { AuthResponse, Project, Task, TaskPriority, TaskStatus } from '@flo
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 
-import { archiveProject, createComment, createProject, createTask, deleteComment, deleteTask, listComments, listMembers, listProjectActivity, listProjects, listTasks, listNotifications, listPresence, markAllNotificationsRead, markNotificationRead, moveTask, unreadNotificationCount, updateComment, updateProject, updateTask, type TaskFilters } from '../api';
+import { archiveProject, createComment, createProject, createTask, deleteComment, deleteTask, getProject, listComments, listMembers, listProjectActivity, listProjects, listTasks, listNotifications, listPresence, markAllNotificationsRead, markNotificationRead, moveTask, unreadNotificationCount, updateComment, updateProject, updateTask, type TaskFilters } from '../api';
 import { boardStatuses, groupTasks, isOverdue } from '../board';
 import { bindRealtime, connectRealtime, type ConnectionState } from '../realtime';
 
@@ -102,7 +102,8 @@ export function WorkspaceApp({ workspaceId, workspaceName, userName, onLogout, i
   const [editingTask, setEditingTask] = useState<Task>();
   const [filters, setFilters] = useState<TaskFilters>({});
   const projects = useQuery({ queryKey: ['projects', workspaceId], queryFn: () => listProjects(workspaceId) });
-  const selectedProject = projects.data?.items.find((project) => project.id === selectedProjectId) ?? projects.data?.items[0];
+  const targetedProject = useQuery({ queryKey: ['project', workspaceId, initialProjectId], queryFn: () => getProject(workspaceId, initialProjectId!), enabled: Boolean(initialProjectId && !projects.data?.items.some((project) => project.id === initialProjectId)) });
+  const selectedProject = projects.data?.items.find((project) => project.id === selectedProjectId) ?? (selectedProjectId === initialProjectId ? targetedProject.data?.project : undefined) ?? (!selectedProjectId ? projects.data?.items[0] : undefined);
   const tasks = useQuery({ queryKey: ['tasks', workspaceId, selectedProject?.id, filters], queryFn: () => listTasks(workspaceId, selectedProject!.id, filters), enabled: Boolean(selectedProject?.id) });
   const members = useQuery({ queryKey: ['members', workspaceId], queryFn: () => listMembers(workspaceId) });
   const presence = useQuery({ queryKey: ['presence', workspaceId], queryFn: () => listPresence(workspaceId), refetchInterval: 10000 });
