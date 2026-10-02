@@ -170,8 +170,9 @@ function App() {
     queryFn: listWorkspaces,
     enabled: Boolean(me.data),
   });
-  const [area, setArea] = useState<'projects' | 'incidents' | 'automation' | 'oncall' | 'status' | 'reliability' | 'intelligence'>('projects');
-  const [sourceTarget, setSourceTarget] = useState('');
+  const initialPath = window.location.pathname + window.location.search;
+  const [area, setArea] = useState<'projects' | 'incidents' | 'automation' | 'oncall' | 'status' | 'reliability' | 'intelligence'>(() => window.location.pathname.startsWith('/intelligence') ? 'intelligence' : window.location.pathname.startsWith('/incidents') ? 'incidents' : window.location.pathname.startsWith('/oncall') ? 'oncall' : window.location.pathname.startsWith('/reliability') ? 'reliability' : window.location.pathname.startsWith('/automation') ? 'automation' : window.location.pathname === '/status' ? 'status' : 'projects');
+  const [sourceTarget, setSourceTarget] = useState(initialPath === '/' ? '' : initialPath);
   const [authMode, setAuthMode] = useState<AuthMode>('login');
   const [showOnboarding, setShowOnboarding] = useState(false);
   const logoutMutation = useMutation({
@@ -243,6 +244,7 @@ function App() {
           role={activeWorkspace.role}
           onLogout={() => logoutMutation.mutate()}
           initialDeadLetterId={new URL(sourceTarget || '/', window.location.origin).searchParams.get('dead') ?? undefined}
+          initialRunId={new URL(sourceTarget || '/', window.location.origin).searchParams.get('run') ?? undefined}
         />
       ) : area === 'incidents' ? (
         <IncidentApp

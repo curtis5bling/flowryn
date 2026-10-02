@@ -779,18 +779,20 @@ export function AutomationApp({
   role,
   onLogout,
   initialDeadLetterId,
+  initialRunId,
 }: {
   workspaceId: string;
   workspaceName: string;
   role: string;
   onLogout: () => void;
   initialDeadLetterId?: string;
+  initialRunId?: string;
 }) {
   const client = useQueryClient();
   const admin = role === 'owner' || role === 'admin';
   const [state, setState] = useState<ConnectionState>('connecting');
   const [tab, setTab] = useState<'rules' | 'runs' | 'integrations' | 'dead-letters' | 'metrics'>(
-    initialDeadLetterId ? 'dead-letters' : 'rules',
+    initialRunId ? 'runs' : initialDeadLetterId ? 'dead-letters' : 'rules',
   );
   const [page, setPage] = useState(1);
   const [referencePage, setReferencePage] = useState(1);
@@ -801,7 +803,7 @@ export function AutomationApp({
   const [to, setTo] = useState('');
   const [editor, setEditor] = useState<AutomationRule | 'new'>();
   const [integrationEditor, setIntegrationEditor] = useState<Integration | 'new'>();
-  const [selectedRun, setSelectedRun] = useState('');
+  const [selectedRun, setSelectedRun] = useState(initialRunId ?? '');
   const [selectedIntegration, setSelectedIntegration] = useState('');
   const [secret, setSecret] = useState('');
   const [confirm, setConfirm] = useState<{ path: string; label: string }>();

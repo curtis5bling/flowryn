@@ -12,7 +12,7 @@ const signal = new Schema({
   assigneeIds: [Schema.Types.ObjectId], state: { type: String, enum: ['active', 'resolved', 'stale'], default: 'active' }, severity: String, urgency: String, impact: String, confidence: String,
   detectedAt: Date, lastObservedAt: Date, resolvedAt: Date, sourceRevision: { type: String, required: true }, scoreRevision: String, facts: Schema.Types.Mixed,
   score: { type: Number, min: 0, max: 100 }, scoreGroup: { type: String, enum: ['now', 'soon', 'watch'] }, factors: [factor], explanation: { type: String, maxlength: 600 }, policyVersion: Number,
-  observationVersion: { type: Number, default: 1 }, expiresAt: Date,
+  observationVersion: { type: Number, default: 1 }, recurrenceCount: { type: Number, default: 0 }, expiresAt: Date,
 }, { timestamps: true });
 signal.index({ workspaceId: 1, deduplicationKey: 1 }, { unique: true }); signal.index({ workspaceId: 1, state: 1, score: -1, detectedAt: 1, _id: 1 }); signal.index({ workspaceId: 1, assigneeIds: 1, state: 1, score: -1 }); signal.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 export const OperationalSignalModel = model('OperationalSignal', signal);
