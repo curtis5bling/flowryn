@@ -81,6 +81,7 @@ export const bindRealtime = (
       'intelligence-queue',
       'intelligence-recommendations',
       'intelligence-policy',
+      'intelligence-policy-history',
       'intelligence-metrics',
     ]) {
       void queryClient.invalidateQueries({
