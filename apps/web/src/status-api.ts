@@ -72,6 +72,8 @@ export const getStatusMetrics = (workspaceId: string, pageId: string) =>
   request<{ components: Record<string, number>; subscribers: number; deliverySuccessRate: number | null; publicIncidentsLast365Days: number; meanIncidentDurationMs: number | null; availabilityNotice: string }>(`/api/workspaces/${workspaceId}/status-pages/${pageId}/metrics`);
 export const getDeliveryFailures = (workspaceId: string, pageId: string) =>
   request<{ deliveries: Array<{ _id: string; status: string; errorCode: string; attemptCount: number }> }>(`/api/workspaces/${workspaceId}/status-pages/${pageId}/deliveries`);
+export const getMaintenance = (workspaceId: string, pageId: string) =>
+  request<{ maintenance: Array<{ _id: string; title: string; status: string; scheduledStartAt: string }> }>(`/api/workspaces/${workspaceId}/status-pages/${pageId}/maintenance`);
 export const getPublicStatus = (slug: string) =>
   request<PublicSnapshot>(`/api/status/${encodeURIComponent(slug)}`);
 export const subscribeStatus = (slug: string, email: string) =>

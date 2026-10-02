@@ -778,17 +778,19 @@ export function AutomationApp({
   workspaceName,
   role,
   onLogout,
+  initialDeadLetterId,
 }: {
   workspaceId: string;
   workspaceName: string;
   role: string;
   onLogout: () => void;
+  initialDeadLetterId?: string;
 }) {
   const client = useQueryClient();
   const admin = role === 'owner' || role === 'admin';
   const [state, setState] = useState<ConnectionState>('connecting');
   const [tab, setTab] = useState<'rules' | 'runs' | 'integrations' | 'dead-letters' | 'metrics'>(
-    'rules',
+    initialDeadLetterId ? 'dead-letters' : 'rules',
   );
   const [page, setPage] = useState(1);
   const [referencePage, setReferencePage] = useState(1);
@@ -856,6 +858,7 @@ export function AutomationApp({
     enabled: admin && tab === 'dead-letters',
     refetchInterval: 15000,
   });
+  useEffect(() => { if (initialDeadLetterId && dead.data) document.getElementById(`dead-letter-${initialDeadLetterId}`)?.scrollIntoView({ block: 'center' }); }, [initialDeadLetterId, dead.data]);
   const metrics = useQuery({
     queryKey: ['automation-metrics', workspaceId],
     queryFn: () => getAutomationMetrics(workspaceId),
@@ -1468,7 +1471,7 @@ export function AutomationApp({
           <h2>Dead-letter events</h2>
           {dead.data?.items.length === 0 && <p>No dead-letter events.</p>}
           {dead.data?.items.map((event) => (
-            <article key={event.id} className="automation-panel">
+            <article id={`dead-letter-${event.id}`} key={event.id} className="automation-panel">
               <p>
                 {event.eventType} · {event.error}
               </p>
