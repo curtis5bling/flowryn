@@ -78,6 +78,7 @@ export const bindRealtime = (
       'automation-dead-letters',
       'automation-metrics',
       'oncall',
+      'intelligence-evaluation',
       'intelligence-queue',
       'intelligence-recommendations',
       'intelligence-policy',

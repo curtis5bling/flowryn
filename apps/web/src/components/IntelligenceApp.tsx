@@ -12,7 +12,7 @@ export function IntelligenceApp({ workspaceId, role, onNavigate, initialEvaluati
   const policy = useQuery({ queryKey: ['intelligence-policy', workspaceId], queryFn: () => getActivePolicy(workspaceId) });
   const history = useQuery({ queryKey: ['intelligence-policy-history', workspaceId], queryFn: () => listPolicies(workspaceId), enabled: admin });
   const metrics = useQuery({ queryKey: ['intelligence-metrics', workspaceId], queryFn: () => getIntelligenceMetrics(workspaceId), enabled: admin });
-  const targetedEvaluation = useQuery({ queryKey: ['intelligence-evaluation', workspaceId, initialEvaluationId], queryFn: () => getIntelligenceEvaluation(workspaceId, initialEvaluationId!), enabled: admin && Boolean(initialEvaluationId) });
+  const targetedEvaluation = useQuery({ queryKey: ['intelligence-evaluation', workspaceId, initialEvaluationId], queryFn: () => getIntelligenceEvaluation(workspaceId, initialEvaluationId!), enabled: admin && Boolean(initialEvaluationId), refetchInterval: (query) => ['pending', 'processing'].includes(query.state.data?.evaluation.status ?? '') ? 2000 : false });
   const refresh = async () => { await client.invalidateQueries({ predicate: (query) => String(query.queryKey[0]).startsWith('intelligence-') }); };
   useEffect(() => { const down=()=>setOnline(false); const up=()=>{setOnline(true);setReconnecting(true);void refresh().finally(()=>setReconnecting(false));}; addEventListener('offline',down);addEventListener('online',up);return()=>{removeEventListener('offline',down);removeEventListener('online',up);}; }, []);
   useEffect(() => bindRealtime(connectRealtime(), workspaceId, undefined, client, setConnection), [workspaceId, client]);
