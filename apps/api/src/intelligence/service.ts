@@ -71,7 +71,7 @@ const candidatesFor = async (workspaceId: string, now: Date): Promise<{ items: C
   const mark = (full: boolean, ...types: IntelligenceSignalType[]) => { if (full) types.forEach((type) => incompleteTypes.add(type)); };
   mark(tasks.length === 500, 'task.overdue', 'task.blocked'); mark(incidents.length === 500, 'incident.highSeverity'); mark(alerts.length === 500, 'alert.unacknowledged', 'alert.escalating'); mark(evaluations.length > 500 || activeSlos.length === 500, 'slo.breached', 'slo.budgetDepleted'); mark(monitors.length === 500, 'monitor.repeatedFailure'); mark(monitorDead.length === 500, 'monitor.deadLetter'); mark(automationDead.truncated, 'automation.deadLetter'); mark(schedules.length === 200 || overrides.length === 1000, 'oncall.coverageGap'); mark(maintenance.length === 500, 'maintenance.upcoming', 'maintenance.overdue'); mark(services.length === 500, 'service.ownerlessCritical');
   if (result.length > 2000) intelligenceSignalTypes.forEach((type) => incompleteTypes.add(type));
-  return { items: result.slice(0, 2000), incompleteTypes };
+  return { items: result, incompleteTypes };
 };
 
 export const sourceConditionCurrent = async (signal: { workspaceId: unknown; sourceType: string; sourceId: string; sourceRevision: string }, now = new Date()) => (await candidatesFor(String(signal.workspaceId), now)).items.some((candidate) => candidate.type === signal.sourceType && candidate.id === signal.sourceId && candidate.revision === signal.sourceRevision);
@@ -81,7 +81,7 @@ const reconcileWorkspaceUnlocked = async (workspaceId: string, now: Date, leaseO
   const renewLease = async () => { const renewed = await IntelligenceCheckpointModel.updateOne({ _id: `workspace:${workspaceId}`, leaseOwner }, { $set: { leaseExpiresAt: new Date(Date.now() + 120_000) } }); if (renewed.matchedCount !== 1) throw new Error('Reconciliation lease lost'); await renewEvaluationLease?.(); };
   const policyDoc = await ensureActivePolicy(workspaceId); const policy = policyDoc.configuration as IntelligencePolicyInput;
   const reopened = await IntelligenceRecommendationModel.updateMany({ workspaceId, state: 'snoozed', snoozedUntil: { $lte: now }, expiresAt: { $gt: now } }, { $set: { state: 'open' }, $unset: { snoozedUntil: 1 } });
-  const scan = await candidatesFor(workspaceId, now); const candidates = scan.items.filter((x) => policy.includedSignalTypes.includes(x.type)); const observed = new Set<string>();
+  const scan = await candidatesFor(workspaceId, now); const candidates = scan.items.filter((x) => policy.includedSignalTypes.includes(x.type)).sort((a, b) => calculateScore(b, policy).score - calculateScore(a, policy).score || a.type.localeCompare(b.type) || a.id.localeCompare(b.id)).slice(0, 2000); const observed = new Set<string>();
   let changed = 0;
   for (const item of candidates) {
     await renewLease();

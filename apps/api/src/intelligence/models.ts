@@ -26,7 +26,7 @@ const recommendation = new Schema({
   state: { type: String, enum: ['open', 'accepted', 'dismissed', 'snoozed', 'completed', 'stale'], default: 'open' }, staleReason: { type: String, enum: ['source', 'expired', 'capacity'] }, operationId: String, policyVersion: Number, sourceVersion: String,
   acceptedAt: Date, dismissedAt: Date, snoozedUntil: Date, completedAt: Date, staleAt: Date, expiresAt: Date, actedBy: Schema.Types.ObjectId,
 }, { timestamps: true });
-recommendation.index({ workspaceId: 1, deduplicationKey: 1 }, { unique: true }); recommendation.index({ workspaceId: 1, state: 1, expiresAt: 1 });
+recommendation.index({ workspaceId: 1, deduplicationKey: 1 }, { unique: true }); recommendation.index({ workspaceId: 1, state: 1, expiresAt: 1 }); recommendation.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 export const IntelligenceRecommendationModel = model('IntelligenceRecommendation', recommendation);
 
 const evaluation = new Schema({ workspaceId: oid, sourceType: String, sourceId: String, workKey: { type: String, required: true }, sourceRevision: String, retryOperationIds: [String], status: { type: String, enum: ['pending', 'processing', 'completed', 'dead'], default: 'pending' }, availableAt: { type: Date, default: Date.now }, attemptCount: { type: Number, default: 0 }, leaseOwner: String, leaseExpiresAt: Date, error: String, completedAt: Date }, { timestamps: true });
