@@ -105,7 +105,7 @@ export function WorkspaceApp({ workspaceId, workspaceName, userName, onLogout, i
   const targetedProject = useQuery({ queryKey: ['project', workspaceId, initialProjectId], queryFn: () => getProject(workspaceId, initialProjectId!), enabled: Boolean(initialProjectId && !projects.data?.items.some((project) => project.id === initialProjectId)) });
   const targetedTask = useQuery({ queryKey: ['task', workspaceId, initialTaskId], queryFn: () => getTask(workspaceId, initialTaskId!), enabled: Boolean(initialTaskId) });
   const [targetOpened, setTargetOpened] = useState(false); useEffect(() => { if (targetedTask.data?.task && !targetOpened) { setEditingTask(targetedTask.data.task); setDialog('edit-task'); setTargetOpened(true); } }, [targetOpened, targetedTask.data]);
-  const selectedProject = projects.data?.items.find((project) => project.id === selectedProjectId) ?? (selectedProjectId === initialProjectId ? targetedProject.data?.project : undefined) ?? (!selectedProjectId ? projects.data?.items[0] : undefined);
+  const selectedProject = projects.data?.items.find((project) => project.id === selectedProjectId) ?? (selectedProjectId === initialProjectId ? targetedProject.data?.project : undefined) ?? projects.data?.items[0];
   const tasks = useQuery({ queryKey: ['tasks', workspaceId, selectedProject?.id, filters], queryFn: () => listTasks(workspaceId, selectedProject!.id, filters), enabled: Boolean(selectedProject?.id) });
   const members = useQuery({ queryKey: ['members', workspaceId], queryFn: () => listMembers(workspaceId) });
   const presence = useQuery({ queryKey: ['presence', workspaceId], queryFn: () => listPresence(workspaceId), refetchInterval: 10000 });
