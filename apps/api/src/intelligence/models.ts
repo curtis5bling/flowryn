@@ -29,8 +29,8 @@ const recommendation = new Schema({
 recommendation.index({ workspaceId: 1, deduplicationKey: 1 }, { unique: true }); recommendation.index({ workspaceId: 1, state: 1, expiresAt: 1 }); recommendation.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 export const IntelligenceRecommendationModel = model('IntelligenceRecommendation', recommendation);
 
-const evaluation = new Schema({ workspaceId: oid, sourceType: String, sourceId: String, workKey: { type: String, required: true }, sourceRevision: String, retryOperationIds: [String], status: { type: String, enum: ['pending', 'processing', 'completed', 'dead'], default: 'pending' }, availableAt: { type: Date, default: Date.now }, attemptCount: { type: Number, default: 0 }, leaseOwner: String, leaseExpiresAt: Date, error: String, completedAt: Date }, { timestamps: true });
-evaluation.index({ workspaceId: 1, workKey: 1 }, { unique: true }); evaluation.index({ status: 1, availableAt: 1, leaseExpiresAt: 1, _id: 1 });
+const evaluation = new Schema({ workspaceId: oid, sourceType: String, sourceId: String, workKey: { type: String, required: true }, sourceRevision: String, retryOperationIds: [String], status: { type: String, enum: ['pending', 'processing', 'completed', 'dead'], default: 'pending' }, availableAt: { type: Date, default: Date.now }, attemptCount: { type: Number, default: 0 }, leaseOwner: String, leaseExpiresAt: Date, error: String, completedAt: Date, expiresAt: Date }, { timestamps: true });
+evaluation.index({ workspaceId: 1, workKey: 1 }, { unique: true }); evaluation.index({ status: 1, availableAt: 1, leaseExpiresAt: 1, _id: 1 }); evaluation.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 export const IntelligenceEvaluationModel = model('IntelligenceEvaluation', evaluation);
 
 const feedback = new Schema({ workspaceId: oid, recommendationId: oid, operationId: { type: String, required: true }, actorId: oid, action: String, reason: String }, { timestamps: true });
