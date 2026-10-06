@@ -42,7 +42,7 @@ const candidatesFor = async (workspaceId: string, now: Date, target?: { type: st
   const byId = (...types: string[]) => target ? types.includes(target.type) ? { _id: target.id } : { _id: null } : {};
   const after = (key: ScanCursorKey) => !target && cursors[key] ? { _id: { $gt: cursors[key] } } : {};
   const bySlo = target ? ['slo.breached', 'slo.budgetDepleted'].includes(target.type) ? { sloId: new mongoose.Types.ObjectId(target.id) } : { sloId: null } : {};
-  const [taskCandidates, incidents, alerts, evaluations, monitors, monitorDead, automationDead, schedules, maintenance, services, memberIds, activeMonitors] = await Promise.all([
+  const [taskCandidates, incidents, alerts, evaluations, monitors, monitorDead, automationDead, schedules, maintenance, services, memberIds] = await Promise.all([
     TaskModel.find({ workspaceId, ...byId('task.overdue', 'task.blocked'), ...after('task'), status: { $ne: 'done' }, $or: [{ dueDate: { $lt: now } }, { blocked: true }] }).select('_id projectId assigneeId priority blocked dueDate updatedAt').sort({ _id: 1 }).limit(target ? 1 : 500).lean(),
     IncidentModel.find({ workspaceId, ...byId('incident.highSeverity'), ...after('incident'), archivedAt: null, status: { $ne: 'resolved' }, severity: { $in: ['sev1', 'sev2'] } }).select('_id severity commanderId responderIds linkedProjectIds declaredAt acknowledgedAt updatedAt').sort({ _id: 1 }).limit(target ? 1 : 500).lean(),
     AlertModel.find({ workspaceId, ...byId('alert.unacknowledged', 'alert.escalating'), ...after('alert'), status: 'open' }).select('_id severity serviceId projectId escalationPolicyId createdAt updatedAt').sort({ _id: 1 }).limit(target ? 1 : 500).lean(),
@@ -54,8 +54,8 @@ const candidatesFor = async (workspaceId: string, now: Date, target?: { type: st
     MaintenanceModel.find({ workspaceId, ...byId('maintenance.upcoming', 'maintenance.overdue'), ...after('maintenance'), status: { $in: ['scheduled', 'inProgress'] }, scheduledStartAt: { $lte: new Date(now.getTime() + 24 * 3600_000) } }).select('_id statusPageId status scheduledStartAt scheduledEndAt updatedAt').sort({ _id: 1 }).limit(target ? 1 : 500).lean(),
     ServiceModel.find({ workspaceId, ...byId('service.ownerlessCritical'), ...after('service'), archivedAt: null, criticality: { $in: ['tier1', 'tier2'] } }).select('_id ownerIds projectIds criticality version updatedAt').sort({ _id: 1 }).limit(target ? 1 : 500).lean(),
     WorkspaceMemberModel.find({ workspaceId, disabled: { $ne: true } }).distinct('userId'),
-    SyntheticMonitorModel.find({ workspaceId, ...(target?.type === 'monitor.deadLetter' ? {} : byId('monitor.repeatedFailure')), archivedAt: null, enabled: true }).select('_id configVersion').lean(),
   ]);
+  const activeMonitors = await SyntheticMonitorModel.find({ workspaceId, _id: { $in: monitorDead.map((run) => run.monitorId) }, archivedAt: null, enabled: true }).select('_id configVersion').limit(500).lean();
   const activeSlos = await ServiceLevelObjectiveModel.find({ workspaceId, _id: { $in: evaluations.map((item) => item.sloId) }, archivedAt: null, enabled: true }).select('_id version').lean();
   const activeProjectIds = await ProjectModel.find({ workspaceId, _id: { $in: taskCandidates.map((task) => task.projectId) }, status: 'active' }).distinct('_id');
   const activeProjectSet = new Set(activeProjectIds.map(String));
