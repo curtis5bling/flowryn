@@ -3,7 +3,7 @@ import { Schema, model } from 'mongoose';
 const oid = { type: Schema.Types.ObjectId, required: true };
 const factor = new Schema({ key: String, value: Number, weight: Number, contribution: Number, explanation: { type: String, maxlength: 160 }, unknown: Boolean }, { _id: false });
 const policy = new Schema({ workspaceId: oid, version: Number, name: String, configuration: Schema.Types.Mixed, createdBy: oid, activatedBy: Schema.Types.ObjectId, active: { type: Boolean, default: false }, activatedAt: Date, replacedAt: Date }, { timestamps: true });
-policy.index({ workspaceId: 1, version: 1 }, { unique: true }); policy.index({ workspaceId: 1, active: 1 }, { unique: true, partialFilterExpression: { active: true } });
+policy.index({ workspaceId: 1, version: 1 }, { unique: true }); policy.index({ workspaceId: 1, active: 1 });
 export const IntelligencePolicyModel = model('IntelligencePolicy', policy);
 
 const signal = new Schema({
