@@ -72,6 +72,7 @@ export const activityEntityTypeSchema = z.enum([
   'oncall',
   'alert',
   'status',
+  'intelligence',
 ]);
 
 const mongoIdSchema = z.string().regex(/^[a-f\d]{24}$/i, 'Invalid id');
@@ -97,6 +98,7 @@ export const taskSchema = z.object({
   description: z.string(),
   status: taskStatusSchema,
   priority: taskPrioritySchema,
+  blocked: z.boolean().optional(),
   assigneeId: z.string().nullable(),
   dueDate: z.string().datetime().nullable(),
   position: z.number(),
@@ -140,6 +142,7 @@ export const createTaskRequestSchema = z.object({
   description: z.string().trim().max(5000).default(''),
   status: taskStatusSchema.default('backlog'),
   priority: taskPrioritySchema.default('medium'),
+  blocked: z.boolean().default(false),
   assigneeId: mongoIdSchema.optional().nullable(),
   dueDate: optionalDateSchema,
   position: z.number().finite().optional(),
@@ -265,6 +268,14 @@ export const realtimeEventNameSchema = z.enum([
   'monitor.failed',
   'monitor.recovered',
   'monitor.healthChanged',
+  'intelligence.signalCreated',
+  'intelligence.signalUpdated',
+  'intelligence.signalResolved',
+  'intelligence.priorityChanged',
+  'intelligence.recommendationCreated',
+  'intelligence.recommendationUpdated',
+  'intelligence.policyActivated',
+  'intelligence.queueChanged',
 ]);
 export const realtimeEventSchema = z.object({
   eventId: z.string(),
@@ -317,3 +328,4 @@ export * from './automation.js';
 export * from './oncall.js';
 export * from './status.js';
 export * from './reliability.js';
+export * from './intelligence.js';

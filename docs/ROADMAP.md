@@ -63,3 +63,4 @@ Public status pages, vendor-specific paging providers and AI incident automation
 # Milestone 8 — Public status pages
 
 Implemented: safe status-page branding and slugs, public components and health history, sanitized public incident updates, scheduled maintenance, double opt-in subscriber records, durable delivery visibility, bounded public APIs, administration, metrics, and a standalone accessible public route. Custom domains, synthetic monitoring, vendor-specific monitoring, arbitrary templates, SMS, phone, and generated statements remain future work.
+- **Milestone 10 — Operational intelligence:** deterministic explainable priorities, versioned policies, advisory actions, durable reconciliation, bounded metrics, and accessible personal/workspace queues.

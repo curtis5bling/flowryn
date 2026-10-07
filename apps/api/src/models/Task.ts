@@ -8,6 +8,7 @@ const taskSchema = new Schema(
     description: { type: String, default: '', maxlength: 5000 },
     status: { type: String, enum: ['backlog', 'todo', 'in_progress', 'review', 'done'], default: 'backlog', required: true },
     priority: { type: String, enum: ['low', 'medium', 'high', 'urgent'], default: 'medium', required: true },
+    blocked: { type: Boolean, default: false, required: true },
     assigneeId: { type: Schema.Types.ObjectId, ref: 'User', default: null },
     dueDate: { type: Date, default: null },
     position: { type: Number, required: true, default: 0 },

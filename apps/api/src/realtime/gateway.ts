@@ -144,6 +144,14 @@ const audiences: Record<
   'monitor.failed': 'private',
   'monitor.recovered': 'workspace',
   'monitor.healthChanged': 'workspace',
+  'intelligence.signalCreated': 'workspace',
+  'intelligence.signalUpdated': 'workspace',
+  'intelligence.signalResolved': 'workspace',
+  'intelligence.priorityChanged': 'workspace',
+  'intelligence.recommendationCreated': 'workspace',
+  'intelligence.recommendationUpdated': 'workspace',
+  'intelligence.policyActivated': 'workspace',
+  'intelligence.queueChanged': 'workspace',
 };
 
 export const publishRealtimeEvent = (

@@ -11,6 +11,7 @@ import { createRoot } from 'react-dom/client';
 import { createWorkspace, getCurrentUser, listWorkspaces, login, logout, register } from './api';
 import { AutomationApp } from './components/AutomationApp';
 import { IncidentApp } from './components/IncidentApp';
+import { IntelligenceApp } from './components/IntelligenceApp';
 import { OncallApp } from './components/OncallApp';
 import { PublicStatusPage } from './components/PublicStatusPage';
 import { ReliabilityApp } from './components/ReliabilityApp';
@@ -103,7 +104,7 @@ function AuthShell({
           {mutation.error && <p className="form-error">{mutation.error.message}</p>}
           <button className="primary-button" disabled={mutation.isPending}>
             {mutation.isPending ? 'Opening...' : mode === 'login' ? 'Sign in' : 'Create account'}{' '}
-            <span>↗</span>
+            <span aria-hidden="true">→</span>
           </button>
         </form>
         <button
@@ -154,7 +155,7 @@ function Onboarding({ onComplete }: { onComplete: () => void }) {
           </label>
           {mutation.error && <p className="form-error">{mutation.error.message}</p>}
           <button className="primary-button" disabled={mutation.isPending}>
-            {mutation.isPending ? 'Creating...' : 'Enter workspace'} <span>↗</span>
+            {mutation.isPending ? 'Creating...' : 'Enter workspace'} <span aria-hidden="true">→</span>
           </button>
         </form>
       </div>
@@ -169,7 +170,9 @@ function App() {
     queryFn: listWorkspaces,
     enabled: Boolean(me.data),
   });
-  const [area, setArea] = useState<'projects' | 'incidents' | 'automation' | 'oncall' | 'status' | 'reliability'>('projects');
+  const initialPath = window.location.pathname + window.location.search;
+  const [area, setArea] = useState<'projects' | 'incidents' | 'automation' | 'oncall' | 'status' | 'reliability' | 'intelligence'>(() => window.location.pathname.startsWith('/intelligence') ? 'intelligence' : window.location.pathname.startsWith('/incidents') ? 'incidents' : window.location.pathname.startsWith('/oncall') ? 'oncall' : window.location.pathname.startsWith('/reliability') ? 'reliability' : window.location.pathname.startsWith('/automation') ? 'automation' : window.location.pathname === '/status' ? 'status' : 'projects');
+  const [sourceTarget, setSourceTarget] = useState(initialPath === '/' ? '' : initialPath);
   const [authMode, setAuthMode] = useState<AuthMode>('login');
   const [showOnboarding, setShowOnboarding] = useState(false);
   const logoutMutation = useMutation({
@@ -222,14 +225,17 @@ function App() {
         </button>
         <button aria-pressed={area === 'status'} onClick={() => setArea('status')}>Status pages</button>
         <button aria-pressed={area === 'reliability'} onClick={() => setArea('reliability')}>Reliability</button>
+        <button aria-pressed={area === 'intelligence'} onClick={() => setArea('intelligence')}>Priorities</button>
       </nav>
-      {area === 'reliability' ? <ReliabilityApp workspaceId={activeWorkspace.id} role={activeWorkspace.role} /> : area === 'status' ? <StatusAdminApp workspaceId={activeWorkspace.id} role={activeWorkspace.role} /> : area === 'oncall' ? (
+      {area === 'intelligence' ? <IntelligenceApp workspaceId={activeWorkspace.id} role={activeWorkspace.role} initialEvaluationId={new URL(sourceTarget || '/', window.location.origin).searchParams.get('evaluation') ?? undefined} onNavigate={(deepLink) => { window.history.replaceState({}, '', deepLink); setSourceTarget(deepLink); setArea(deepLink.startsWith('/intelligence') ? 'intelligence' : deepLink.startsWith('/incidents') ? 'incidents' : deepLink.startsWith('/oncall') ? 'oncall' : deepLink.startsWith('/reliability') ? 'reliability' : deepLink.startsWith('/automation') ? 'automation' : deepLink.startsWith('/status') ? 'status' : 'projects'); }} /> : area === 'reliability' ? <ReliabilityApp workspaceId={activeWorkspace.id} role={activeWorkspace.role} initialServiceId={new URL(sourceTarget || '/', window.location.origin).searchParams.get('service') ?? undefined} initialMonitorId={new URL(sourceTarget || '/', window.location.origin).searchParams.get('monitor') ?? undefined} initialSloId={new URL(sourceTarget || '/', window.location.origin).searchParams.get('slo') ?? undefined} initialRunId={new URL(sourceTarget || '/', window.location.origin).searchParams.get('run') ?? undefined} /> : area === 'status' ? <StatusAdminApp workspaceId={activeWorkspace.id} role={activeWorkspace.role} initialPageId={new URL(sourceTarget || '/', window.location.origin).searchParams.get('page') ?? undefined} initialMaintenanceId={new URL(sourceTarget || '/', window.location.origin).searchParams.get('maintenance') ?? undefined} /> : area === 'oncall' ? (
         <OncallApp
           workspaceId={activeWorkspace.id}
           workspaceName={activeWorkspace.name}
           userId={me.data.user.id}
           role={activeWorkspace.role}
           onLogout={() => logoutMutation.mutate()}
+          initialAlertId={new URL(sourceTarget || '/', window.location.origin).searchParams.get('alert') ?? undefined}
+          initialScheduleId={new URL(sourceTarget || '/', window.location.origin).searchParams.get('schedule') ?? undefined}
         />
       ) : area === 'automation' ? (
         <AutomationApp
@@ -237,6 +243,8 @@ function App() {
           workspaceName={activeWorkspace.name}
           role={activeWorkspace.role}
           onLogout={() => logoutMutation.mutate()}
+          initialDeadLetterId={new URL(sourceTarget || '/', window.location.origin).searchParams.get('dead') ?? undefined}
+          initialRunId={new URL(sourceTarget || '/', window.location.origin).searchParams.get('run') ?? undefined}
         />
       ) : area === 'incidents' ? (
         <IncidentApp
@@ -245,6 +253,7 @@ function App() {
           userId={me.data.user.id}
           role={activeWorkspace.role}
           onLogout={() => logoutMutation.mutate()}
+          initialIncidentId={sourceTarget.startsWith('/incidents/') ? sourceTarget.split('/')[2]?.split('?')[0] : undefined}
         />
       ) : (
         <WorkspaceApp
@@ -252,6 +261,8 @@ function App() {
           workspaceName={activeWorkspace.name}
           userName={me.data.user.name}
           onLogout={() => logoutMutation.mutate()}
+          initialProjectId={sourceTarget.startsWith('/projects/') ? sourceTarget.split('/')[2]?.split('?')[0] : undefined}
+          initialTaskId={new URL(sourceTarget || '/', window.location.origin).searchParams.get('task') ?? undefined}
         />
       )}
     </>

@@ -78,6 +78,12 @@ export const bindRealtime = (
       'automation-dead-letters',
       'automation-metrics',
       'oncall',
+      'intelligence-evaluation',
+      'intelligence-queue',
+      'intelligence-recommendations',
+      'intelligence-policy',
+      'intelligence-policy-history',
+      'intelligence-metrics',
     ]) {
       void queryClient.invalidateQueries({
         queryKey: [key, workspaceId],

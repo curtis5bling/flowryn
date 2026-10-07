@@ -17,6 +17,8 @@ import {
   IncidentError,
   validateIncidentMembers,
 } from '../incidents/service.js';
+import { IntelligenceEvaluationModel } from '../intelligence/models.js';
+import { processIntelligenceWork } from '../intelligence/service.js';
 import { ActivityModel } from '../models/Activity.js';
 import { NotificationModel } from '../models/Notification.js';
 import { TaskModel } from '../models/Task.js';
@@ -120,6 +122,11 @@ export const processEvent = async (event: ClaimedEvent) => {
       assertIncident(lock.modifiedCount, 409, 'Lease lost');
       assertIncident(event.schemaVersion === 1, 400, 'Unsupported event schema version');
       const payload = automationPayloadSchema.parse(event.payload);
+      await IntelligenceEvaluationModel.updateOne(
+        { workspaceId: event.workspaceId, workKey: `outbox:${event.eventId}` },
+        { $setOnInsert: { sourceType: event.aggregateType, sourceId: String(event.aggregateId), sourceRevision: event.eventId, status: 'pending', availableAt: new Date() } },
+        { upsert: true, session },
+      );
       // Workspace rule counts are bounded at creation. All matching rules are snapshotted atomically.
       const rules = await AutomationRuleModel.find({
         workspaceId: event.workspaceId,
@@ -701,6 +708,7 @@ export class AutomationWorker {
   private statusRunning = false;
   private reliabilityRunning = false;
   private reliabilitySloRunning = false;
+  private intelligenceRunning = false;
   ready = false;
   constructor(
     readonly concurrency = 4,
@@ -761,6 +769,15 @@ export class AutomationWorker {
                   return processDueSloEvaluation(new Date(), this.id)
                     .then(() => undefined)
                     .finally(() => { this.reliabilitySloRunning = false; });
+                },
+          async () =>
+            this.intelligenceRunning
+              ? null
+              : () => {
+                  this.intelligenceRunning = true;
+                  return processIntelligenceWork(new Date(), this.id)
+                    .then(() => undefined)
+                    .finally(() => { this.intelligenceRunning = false; });
                 },
         ];
         let execute: (() => Promise<void>) | null = null;
