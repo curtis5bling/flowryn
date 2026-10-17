@@ -21,6 +21,7 @@ const allowedOrigins = (process.env.SOCKET_ALLOWED_ORIGINS ?? 'http://localhost:
 const start = async () => {
   const coordination = await createCoordination();
   const gateway = createRealtimeGateway(server, allowedOrigins, coordination);
+  await coordination.ensureReady();
   const closeHints = await startAutomationHints(relayAutomationHint);
   let stopping = false;
   const stop = async () => {

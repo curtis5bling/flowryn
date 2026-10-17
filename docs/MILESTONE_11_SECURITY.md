@@ -1,0 +1,19 @@
+# Milestone 11 endpoint security inventory
+
+All authenticated routes below pass through `requireAuth` and `requireWorkspaceRole`. Every database query includes `workspaceId`; write routes additionally enforce the role and immutable source revision required by the operation.
+
+| Route family | Bounds and authorization | Integration evidence |
+|---|---|---|
+| `GET/POST /changes/environments`, `PATCH /environments/:id`, `POST /environments/:id/archive` | Lists stop at 200; writes require owner/admin; service references must belong to the workspace | `enforces environment administration, tenant scope, update, and archival`; `denies archived and cross-workspace release references and bounds metadata` |
+| `GET/POST /changes/releases` | Cursor pagination is limited to 100; state/environment/service filters are typed; metadata has 30 bounded scalar keys; referenced environment, services, and project are transactionally fenced | `creates an immutable initial history and enforces exact idempotency`; archived/cross-workspace and metadata test; metrics tenant-isolation test |
+| `GET /changes/releases/:id`, `POST /releases/:id/transition` | Workspace-scoped detail collections have explicit limits; transitions require monotonic sequences, valid lifecycle edges, active references, and exact operation receipts | lifecycle/idempotency test; competing manual test; signed/manual ordering test |
+| `GET/POST /changes/policies`, `POST /policies/:id/activate`, `POST /policies/:id/rollback` | History stops at 100; writes require owner/admin; schemas bound every scalar and collection; activation fences the active version and operation identity | immutable-policy and role test; activation-versus-approval race test; shared schema tests |
+| `POST /releases/:id/approvals`, `POST /approvals/:id/decisions`, `POST /approvals/:id/cancel` | Release, risk, policy, membership, requester, separation-of-duty, expiry, and operation identity are rechecked transactionally | request/cancel/expiry test; quorum/membership test; terminal-outcome test; cancellation/expiry race test; policy-activation race test |
+| `POST /correlations/:id/decision` | Owner/admin only; candidate and immutable source revisions are required; decisions are idempotent | sanitized correlation and authorization test; resolved-source staleness test |
+| `GET /changes/work`, `POST /work/:id/retry` | List stops at 100; owner/admin only; retry requires dead-letter state and current release/resource/policy revisions | worker retry/dead-letter/lease integration test |
+| `GET /changes/metrics` | Typed UTC range with a maximum of 366 days; all aggregations match the workspace | tenant-safe bounded metrics integration test and shared range tests |
+| `POST /api/webhooks/changes/:workspaceId/:integrationId` | Raw body is limited to 64 KiB; HMAC timestamp tolerance is five minutes; UUID delivery identity, replay receipt, strict sequence, active integration/secret version, resources, and 30-request minute bucket are fenced | signed authentication/replay test; malformed/key-rotation test; limiter isolation/failure test; signed/manual ordering test |
+
+Milestone 11 accepts no executable scripts, commands, templates, PromQL, or outbound destination URLs. Text fields remain inert bounded data and React escapes them when rendered. `rollbackPlanRef` is a bounded reference string and is never fetched or executed. SSRF and redirect handling therefore have no Milestone 11 endpoint path; outbound webhook SSRF controls remain covered by the automation security suite.
+
+Realtime change events carry empty refresh payloads. Correlation evidence stores allowlisted identifiers and numeric facts rather than incident narratives. Integration credentials are excluded by schema selection, and the inbound route returns only generic rejection bodies. Public status routes are unchanged by this milestone and receive no change-intelligence source identifiers.

@@ -1,0 +1,20 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import { request } from './api';
+export type ChangeEnvironment={_id:string;name:string;slug:string;tier:string;active:boolean};
+export type ChangeRelease={_id:string;title:string;version:string;state:string;environmentId:string;revision:number;createdAt:string};
+export const listEnvironments=(w:string)=>request<{environments:ChangeEnvironment[]}>(`/api/workspaces/${w}/changes/environments`);
+export const listReleases=(w:string,filters:{state?:string;cursor?:string;limit?:number}={})=>{const query=new URLSearchParams();if(filters.state)query.set('state',filters.state);if(filters.cursor)query.set('cursor',filters.cursor);query.set('limit',String(Math.min(100,Math.max(1,filters.limit??25))));return request<{releases:ChangeRelease[];nextCursor:string|null}>(`/api/workspaces/${w}/changes/releases?${query}`)};
+export const getRelease=(w:string,id:string)=>request<any>(`/api/workspaces/${w}/changes/releases/${id}`);
+export const createEnvironment=(w:string,body:unknown)=>request(`/api/workspaces/${w}/changes/environments`,{method:'POST',body:JSON.stringify(body)});
+export const updateEnvironment=(w:string,id:string,body:unknown)=>request(`/api/workspaces/${w}/changes/environments/${id}`,{method:'PATCH',body:JSON.stringify(body)});
+export const archiveEnvironment=(w:string,id:string)=>request(`/api/workspaces/${w}/changes/environments/${id}/archive`,{method:'POST',body:'{}'});
+export const createRelease=(w:string,body:unknown)=>request(`/api/workspaces/${w}/changes/releases`,{method:'POST',body:JSON.stringify(body)});
+export const transitionRelease=(w:string,id:string,state:string,sequence:number)=>request(`/api/workspaces/${w}/changes/releases/${id}/transition`,{method:'POST',body:JSON.stringify({operationId:crypto.randomUUID(),state,sequence,occurredAt:new Date().toISOString(),sourceRevision:`manual-${sequence}`})});
+export const requestApproval=(w:string,id:string)=>request(`/api/workspaces/${w}/changes/releases/${id}/approvals`,{method:'POST',body:JSON.stringify({operationId:crypto.randomUUID()})});
+export const decideApproval=(w:string,id:string,decision:'approved'|'rejected')=>request(`/api/workspaces/${w}/changes/approvals/${id}/decisions`,{method:'POST',body:JSON.stringify({operationId:crypto.randomUUID(),decision})});
+export const cancelApproval=(w:string,id:string)=>request(`/api/workspaces/${w}/changes/approvals/${id}/cancel`,{method:'POST',body:JSON.stringify({operationId:crypto.randomUUID()})});
+export const decideCorrelation=(w:string,id:string,state:'confirmed'|'rejected')=>request(`/api/workspaces/${w}/changes/correlations/${id}/decision`,{method:'POST',body:JSON.stringify({operationId:crypto.randomUUID(),state})});
+export const listChangePolicies=(w:string)=>request<{policies:any[]}>(`/api/workspaces/${w}/changes/policies`);
+export const createChangePolicy=(w:string,body:unknown)=>request(`/api/workspaces/${w}/changes/policies`,{method:'POST',body:JSON.stringify(body)});
+export const activateChangePolicy=(w:string,id:string,expectedActiveVersion:number,rollback=false)=>request(`/api/workspaces/${w}/changes/policies/${id}/${rollback?'rollback':'activate'}`,{method:'POST',body:JSON.stringify({operationId:crypto.randomUUID(),expectedActiveVersion})});
+export const changeMetrics=(w:string)=>{const to=new Date();const from=new Date(to.getTime()-30*86400_000);return request<any>(`/api/workspaces/${w}/changes/metrics?from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`)};

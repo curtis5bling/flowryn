@@ -30,6 +30,7 @@ const workspaceRoom = (id: string) => `workspace:${id}`;
 const projectRoom = (workspaceId: string, id: string) => `workspace:${workspaceId}:project:${id}`;
 let io: Server | undefined;
 const coordinators = new WeakMap<Server, Coordination>();
+const relayedHintIds = new Map<string, number>();
 export const realtimeAvailable = () => Boolean(io && coordinators.get(io)?.available);
 type EventInput = Omit<RealtimeEvent, 'eventId' | 'timestamp'>;
 const envelope = (event: EventInput): RealtimeEvent => ({
@@ -39,6 +40,11 @@ const envelope = (event: EventInput): RealtimeEvent => ({
 });
 export const relayAutomationHint = async (hint: AutomationHint) => {
   if (!io || !coordinators.get(io)?.available) return;
+  const now = Date.now();
+  for (const [eventId, expiresAt] of relayedHintIds) if (expiresAt <= now) relayedHintIds.delete(eventId);
+  if (relayedHintIds.has(hint.eventId)) return;
+  relayedHintIds.set(hint.eventId, now + 5 * 60_000);
+  if (relayedHintIds.size > 10_000) relayedHintIds.delete(relayedHintIds.keys().next().value!);
   if (hint.type.startsWith('automation.rule')) {
     io.local.to(workspaceRoom(hint.workspaceId)).emit(hint.type, hint);
     return;
@@ -152,6 +158,15 @@ const audiences: Record<
   'intelligence.recommendationUpdated': 'workspace',
   'intelligence.policyActivated': 'workspace',
   'intelligence.queueChanged': 'workspace',
+  'change.releaseCreated': 'workspace',
+  'change.deploymentUpdated': 'workspace',
+  'change.riskEvaluated': 'workspace',
+  'change.approvalRequested': 'private',
+  'change.approvalUpdated': 'private',
+  'change.healthUpdated': 'workspace',
+  'change.correlationUpdated': 'workspace',
+  'change.policyActivated': 'private',
+  'change.queueChanged': 'workspace',
 };
 
 export const publishRealtimeEvent = (
@@ -184,6 +199,8 @@ export const publishNotification = (recipientId: string, event: EventInput) => {
   );
   return message;
 };
+export const publishPrivateRealtimeEvent = (recipientId: string, event: EventInput) => { const message = envelope(event); if (io && !coordinators.get(io)?.available) return message; io?.to(`workspace:${event.workspaceId}:user:${recipientId}`).emit(event.type,message); return message; };
+export const publishRestrictedRealtimeEvent = async (event: EventInput) => { const message=envelope(event); if (!io || !coordinators.get(io)?.available) return message; const admins=await WorkspaceMemberModel.find({workspaceId:event.workspaceId,role:{$in:['owner','admin']},disabled:{$ne:true}}).select('userId').limit(500); for(const admin of admins) io.to(`workspace:${event.workspaceId}:user:${admin.userId}`).emit(event.type,message); return message; };
 
 export const getPresenceState = async (workspaceId: string, server = io): Promise<PresenceState> =>
   server ? coordinators.get(server)!.presence(workspaceId) : { users: [], lastSeen: {} };

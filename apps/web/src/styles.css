@@ -1177,3 +1177,68 @@ input:focus {
 .status-operational { color: #176845; } .status-majorOutage, .status-partialOutage { color: #9d3027; } .status-degradedPerformance, .status-maintenance { color: #805207; }
 .status-admin { max-width: 980px; margin: 0 auto; padding: 2rem; }
 @media (max-width: 600px) { .status-list li { align-items: flex-start; flex-direction: column; } .public-status { padding-top: 1.5rem; } }
+
+/* Change Intelligence uses a 44 CSS-pixel minimum interactive target. */
+.workspace-shell {
+  width: min(100%, 1100px);
+  margin: 0 auto;
+  padding: 2rem;
+  overflow-wrap: anywhere;
+}
+.workspace-shell .panel {
+  min-width: 0;
+  margin-block: 1rem;
+  padding: 1.25rem;
+  border: 1px solid #d9e1de;
+  border-radius: 14px;
+  background: #fff;
+}
+.workspace-shell form,
+.workspace-shell label {
+  display: grid;
+  gap: 0.4rem;
+}
+.workspace-shell form {
+  gap: 0.85rem;
+}
+.workspace-shell input,
+.workspace-shell select,
+.workspace-shell button {
+  min-height: 44px;
+  max-width: 100%;
+}
+.workspace-shell input,
+.workspace-shell select {
+  width: 100%;
+}
+.workspace-shell ul {
+  padding-inline-start: 1.25rem;
+}
+.workspace-shell li,
+.workspace-shell nav {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.workspace-shell nav,
+.workspace-shell li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+@media (max-width: 600px) {
+  .area-navigation {
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    padding-inline: 0.75rem;
+  }
+  .area-navigation button {
+    min-height: 44px;
+  }
+  .workspace-shell {
+    padding: 1rem;
+  }
+  .workspace-shell .panel {
+    padding: 1rem;
+  }
+}

@@ -38,7 +38,7 @@ export const automationHintSchema = z
     'Recipient required',
   );
 export type AutomationHint = z.infer<typeof automationHintSchema>;
-const channel = 'flowryn:automation:hints:v1';
+const hintChannel = () => `${process.env.REDIS_KEY_PREFIX ?? 'flowryn'}:automation:hints:v1`;
 let publisher: Redis | undefined;
 let localHandler: ((hint: AutomationHint) => Promise<void>) | undefined;
 export const publishAutomationHint = (
@@ -51,7 +51,7 @@ export const publishAutomationHint = (
     payload: {},
   });
   if (publisher?.status === 'ready')
-    void publisher.publish(channel, JSON.stringify(hint)).catch(() => undefined);
+    void publisher.publish(hintChannel(), JSON.stringify(hint)).catch(() => undefined);
   else if (localHandler) void localHandler(hint).catch(() => undefined);
 };
 // These are disposable REST invalidation hints, never durable worker inputs.
@@ -82,7 +82,7 @@ export const startAutomationHints = async (handler?: (hint: AutomationHint) => P
     }
   });
   sub?.on('ready', () => {
-    void sub.subscribe(channel).catch(() => undefined);
+    void sub.subscribe(hintChannel()).catch(() => undefined);
   });
   try {
     await pub.connect();

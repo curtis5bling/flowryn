@@ -1,0 +1,9 @@
+import { describe, expect, it } from 'vitest';
+
+import { changeMetricsQuerySchema, changePolicyInputSchema, deploymentEventSchema, environmentInputSchema, releaseInputSchema } from './change.js';
+const id='507f1f77bcf86cd799439011';
+describe('change intelligence contracts',()=>{
+  it('bounds environment scope and release metadata',()=>{expect(environmentInputSchema.safeParse({name:'Production',slug:'production',tier:'production',serviceIds:Array(101).fill(id)}).success).toBe(false);expect(releaseInputSchema.safeParse({serviceIds:[id],environmentId:id,version:'1',source:'manual',sourceRevision:'r1',externalId:'x',idempotencyKey:'12345678',title:'Release',metadata:Object.fromEntries(Array.from({length:31},(_,i)=>[`k${i}`,'v']))}).success).toBe(false)});
+  it('rejects cross-workspace shaped and malformed events',()=>{expect(deploymentEventSchema.safeParse({workspaceId:'other',eventId:crypto.randomUUID(),releaseExternalId:'r',sequence:1,state:'completed',occurredAt:new Date().toISOString(),sourceRevision:'1'}).success).toBe(false);expect(deploymentEventSchema.safeParse({workspaceId:id,eventId:crypto.randomUUID(),releaseExternalId:'r',sequence:-1,state:'completed',occurredAt:new Date().toISOString(),sourceRevision:'1'}).success).toBe(false)});
+  it('enforces policy and metric limits',()=>{const policy={name:'Default',timezone:'UTC',requiredApprovals:11,eligibleRoles:['owner'],separationOfDuty:true,riskApprovalThreshold:50,emergencyAllowed:false,requireRollbackPlan:true,preHealthRequired:true,postHealthRequired:true,notificationThreshold:70,retentionDays:365,queueLimit:500,windows:[]};expect(changePolicyInputSchema.safeParse(policy).success).toBe(false);expect(changeMetricsQuerySchema.safeParse({from:'2020-01-01T00:00:00.000Z',to:'2022-01-01T00:00:00.000Z'}).success).toBe(false)});
+});
