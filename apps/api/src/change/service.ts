@@ -136,7 +136,7 @@ export const correlationSourceIsCurrent = async (correlation: { workspaceId: unk
   return false;
 };
 
-export const enqueueChangeWork = async (workspaceId: string, kind: string, entityId: unknown, sourceRevision: string, refresh = false) => { const operationKey = `${kind}:${entityId}:${sourceRevision}`; if (refresh) { const reset = await ChangeWorkModel.updateOne({ workspaceId, operationKey, status: { $in: ['completed', 'dead'] } }, { $set: { status: 'pending', availableAt: new Date(), attemptCount: 0 }, $unset: { completedAt: 1, error: 1, leaseOwner: 1, leaseExpiresAt: 1 } }); if (reset.matchedCount) return reset; } return ChangeWorkModel.updateOne({ workspaceId, operationKey }, { $setOnInsert: { kind, entityId, sourceRevision, status: 'pending', availableAt: new Date() } }, { upsert: true }); };
+export const enqueueChangeWork = async (workspaceId: string, kind: string, entityId: unknown, sourceRevision: string, refresh = false) => { const operationKey = `${kind}:${entityId}:${sourceRevision}`; if (refresh) { const reset = await ChangeWorkModel.updateOne({ workspaceId, operationKey, status: 'completed' }, { $set: { status: 'pending', availableAt: new Date(), attemptCount: 0 }, $unset: { completedAt: 1, error: 1, leaseOwner: 1, leaseExpiresAt: 1 } }); if (reset.matchedCount) return reset; } return ChangeWorkModel.updateOne({ workspaceId, operationKey }, { $setOnInsert: { kind, entityId, sourceRevision, status: 'pending', availableAt: new Date() } }, { upsert: true }); };
 export const expireChangeApprovals = async (now = new Date()) => {
   const expired = await ChangeApprovalModel.find({ state: 'pending', expiresAt: { $lte: now } }).select('_id').sort({ expiresAt: 1, _id: 1 }).limit(100).lean();
   if (!expired.length) return 0;
