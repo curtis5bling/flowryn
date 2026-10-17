@@ -25,8 +25,9 @@ export const deploymentEventSchema = z.object({
   state: releaseStateSchema, occurredAt: z.string().datetime(), sourceRevision: boundedText(160).min(1),
 });
 export const deploymentTransitionSchema = z.object({ operationId: z.string().uuid(), sequence: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER), state: releaseStateSchema, occurredAt: z.string().datetime(), sourceRevision: boundedText(160).min(1) });
+const timezoneSchema = boundedText(80).min(1).refine((timezone) => { try { new Intl.DateTimeFormat('en-US', { timeZone: timezone }); return true; } catch { return false; } }, 'Invalid IANA timezone');
 export const changePolicyInputSchema = z.object({
-  name: boundedText(100).min(2), timezone: boundedText(80).min(1), requiredApprovals: z.number().int().min(0).max(10),
+  name: boundedText(100).min(2), timezone: timezoneSchema, requiredApprovals: z.number().int().min(0).max(10),
   eligibleRoles: z.array(z.enum(['owner', 'admin', 'member'])).min(1).max(3), separationOfDuty: z.boolean(), riskApprovalThreshold: z.number().int().min(0).max(100),
   emergencyAllowed: z.boolean(), requireRollbackPlan: z.boolean(), preHealthRequired: z.boolean(), postHealthRequired: z.boolean(),
   notificationThreshold: z.number().int().min(0).max(100), retentionDays: z.number().int().min(30).max(730), queueLimit: z.number().int().min(10).max(1000),

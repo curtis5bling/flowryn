@@ -17,7 +17,7 @@ release.index({ workspaceId: 1, externalId: 1 }, { unique: true }); release.inde
 export const ChangeReleaseModel = model('ChangeRelease', release);
 
 const history = new Schema({ workspaceId: oid, releaseId: oid, revision: Number, state: String, sourceRevision: String, sequence: Number, occurredAt: Date, eventId: String, actorId: Schema.Types.ObjectId }, { timestamps: true });
-history.index({ workspaceId: 1, eventId: 1 }, { unique: true, sparse: true }); history.index({ workspaceId: 1, releaseId: 1, revision: 1 }, { unique: true });
+history.index({ workspaceId: 1, eventId: 1 }, { unique: true, partialFilterExpression: { eventId: { $type: 'string' } } }); history.index({ workspaceId: 1, releaseId: 1, revision: 1 }, { unique: true });
 export const ChangeDeploymentHistoryModel = model('ChangeDeploymentHistory', history);
 
 const policy = new Schema({ workspaceId: oid, version: Number, name: String, configuration: Schema.Types.Mixed, createdBy: oid, active: { type: Boolean, default: false }, activatedBy: Schema.Types.ObjectId, activatedAt: Date, replacedAt: Date }, { timestamps: true });
