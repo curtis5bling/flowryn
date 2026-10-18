@@ -33,8 +33,8 @@ const approval = new Schema({ workspaceId: oid, releaseId: oid, releaseRevision:
 approval.index({ workspaceId: 1, releaseId: 1, releaseRevision: 1, policyVersion: 1 }, { unique: true }); approval.index({ workspaceId: 1, state: 1, expiresAt: 1 });
 export const ChangeApprovalModel = model('ChangeApproval', approval);
 
-const health = new Schema({ workspaceId: oid, releaseId: oid, releaseRevision: Number, phase: { type: String, enum: ['pre', 'post'] }, classification: { type: String, enum: ['healthy', 'degraded', 'failed', 'unknown'] }, evidence: Schema.Types.Mixed, sourceRevisions: Schema.Types.Mixed, evaluatedAt: Date, humanConfirmedBy: Schema.Types.ObjectId }, { timestamps: true });
-health.index({ workspaceId: 1, releaseId: 1, releaseRevision: 1, phase: 1 }, { unique: true });
+const health = new Schema({ workspaceId: oid, releaseId: oid, releaseRevision: Number, phase: { type: String, enum: ['pre', 'post'] }, observationKey: String, classification: { type: String, enum: ['healthy', 'degraded', 'failed', 'unknown'] }, evidence: Schema.Types.Mixed, sourceRevisions: Schema.Types.Mixed, evaluatedAt: Date, humanConfirmedBy: Schema.Types.ObjectId }, { timestamps: true });
+health.index({ workspaceId: 1, releaseId: 1, releaseRevision: 1, phase: 1, observationKey: 1 }, { unique: true });
 export const ChangeHealthModel = model('ChangeHealth', health);
 
 const correlation = new Schema({ workspaceId: oid, releaseId: oid, releaseRevision: Number, deploymentRevision: Number, policyVersion: Number, sourceType: String, sourceId: String, sourceRevision: String, state: { type: String, enum: ['candidate', 'confirmed', 'rejected', 'expired', 'stale'], default: 'candidate' }, confidence: String, evidence: Schema.Types.Mixed, operationId: String, decidedBy: Schema.Types.ObjectId, decidedAt: Date, expiresAt: Date }, { timestamps: true });
