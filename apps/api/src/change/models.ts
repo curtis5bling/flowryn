@@ -29,8 +29,8 @@ const risk = new Schema({ workspaceId: oid, releaseId: oid, releaseRevision: Num
 risk.index({ workspaceId: 1, releaseId: 1, releaseRevision: 1, policyVersion: 1 }, { unique: true });
 export const ChangeRiskModel = model('ChangeRisk', risk);
 
-const approval = new Schema({ workspaceId: oid, releaseId: oid, releaseRevision: Number, riskId: oid, policyVersion: Number, state: { type: String, enum: ['pending', 'approved', 'rejected', 'expired', 'cancelled', 'superseded'], default: 'pending' }, requiredCount: Number, requesterId: oid, decisions: [{ actorId: Schema.Types.ObjectId, decision: String, reason: String, operationId: String, decidedAt: Date }], expiresAt: Date }, { timestamps: true });
-approval.index({ workspaceId: 1, releaseId: 1, releaseRevision: 1, policyVersion: 1 }, { unique: true }); approval.index({ workspaceId: 1, state: 1, expiresAt: 1 });
+const approval = new Schema({ workspaceId: oid, releaseId: oid, releaseRevision: Number, riskId: oid, policyVersion: Number, attempt: { type: Number, default: 1 }, state: { type: String, enum: ['pending', 'approved', 'rejected', 'expired', 'cancelled', 'superseded'], default: 'pending' }, requiredCount: Number, requesterId: oid, decisions: [{ actorId: Schema.Types.ObjectId, decision: String, reason: String, operationId: String, decidedAt: Date }], expiresAt: Date }, { timestamps: true });
+approval.index({ workspaceId: 1, releaseId: 1, releaseRevision: 1, policyVersion: 1, attempt: 1 }, { unique: true }); approval.index({ workspaceId: 1, state: 1, expiresAt: 1 });
 export const ChangeApprovalModel = model('ChangeApproval', approval);
 
 const health = new Schema({ workspaceId: oid, releaseId: oid, releaseRevision: Number, phase: { type: String, enum: ['pre', 'post'] }, observationKey: String, classification: { type: String, enum: ['healthy', 'degraded', 'failed', 'unknown'] }, evidence: Schema.Types.Mixed, sourceRevisions: Schema.Types.Mixed, evaluatedAt: Date, humanConfirmedBy: Schema.Types.ObjectId }, { timestamps: true });
