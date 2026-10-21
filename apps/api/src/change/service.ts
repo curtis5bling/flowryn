@@ -43,7 +43,7 @@ export const evaluateChangeRisk = async (workspaceId: string, releaseId: string,
     ServiceDependencyModel.countDocuments({ workspaceId, enabled: true, archivedAt: null, $or: [{ upstreamServiceId: { $in: serviceIds } }, { downstreamServiceId: { $in: serviceIds } }] }).limit(101),
     IncidentModel.countDocuments({ workspaceId, _id: { $in: incidentRelationships.map((item) => item.targetId) }, status: { $ne: 'resolved' }, archivedAt: null }).limit(101),
     AlertModel.countDocuments({ workspaceId, serviceId: { $in: serviceIds }, status: { $nin: ['resolved'] } }).limit(101),
-    SloEvaluationModel.find({ workspaceId, serviceId: { $in: serviceIds }, sloId: { $in: activeSloConfigs.map(item=>item._id) } }).sort({ windowEnd: -1, _id: -1 }).limit(500).lean(),
+    SloEvaluationModel.find({ workspaceId, serviceId: { $in: serviceIds }, sloId: { $in: activeSloConfigs.map(item=>item._id) }, windowEnd: { $gte: new Date(now.getTime() - 24 * 3600_000), $lte: now } }).sort({ windowEnd: -1, _id: -1 }).limit(500).lean(),
     SyntheticMonitorRunModel.countDocuments({ workspaceId, serviceId: { $in: serviceIds }, endpointHealthy: false, completedAt: { $gte: since } }).limit(101),
     ChangeReleaseModel.countDocuments({ workspaceId, serviceIds: { $in: serviceIds }, state: { $in: ['failed', 'rolled_back'] }, lastEventAt: { $gte: since }, _id: { $ne: release._id } }).limit(101),
   ]);
@@ -100,18 +100,24 @@ export const generateChangeCorrelations = async (workspaceId: string, releaseId:
   const serviceIds = [...new Set([...direct.map(String), ...edges.flatMap((edge) => [String(edge.upstreamServiceId), String(edge.downstreamServiceId)])])].slice(0, 500);
   const relationships = await ServiceRelationshipModel.find({ workspaceId, serviceId: { $in: serviceIds }, targetType: 'incident', archivedAt: null }).select('targetId').limit(500).lean();
   const incidentIds = relationships.map((item) => item.targetId);
+  const [activeSlos, activeMonitors] = await Promise.all([
+    ServiceLevelObjectiveModel.find({ workspaceId, serviceId: { $in: serviceIds }, enabled: true, archivedAt: null }).select('_id version').limit(500).lean(),
+    SyntheticMonitorModel.find({ workspaceId, serviceId: { $in: serviceIds }, enabled: true, archivedAt: null }).select('_id configVersion').limit(500).lean(),
+  ]);
+  const activeSloVersions = new Map(activeSlos.map((item) => [String(item._id), item.version]));
+  const activeMonitorVersions = new Map(activeMonitors.map((item) => [String(item._id), item.configVersion]));
   const [incidents, alerts, slos, monitors, signals] = await Promise.all([
     IncidentModel.find({ workspaceId, _id: { $in: incidentIds }, declaredAt: { $gte: windowStart, $lte: windowEnd }, archivedAt: null }).select('_id severity updatedAt').limit(100).lean(),
     AlertModel.find({ workspaceId, serviceId: { $in: serviceIds }, firstReceivedAt: { $gte: windowStart, $lte: windowEnd } }).select('_id severity updatedAt').limit(100).lean(),
-    SloEvaluationModel.find({ workspaceId, serviceId: { $in: serviceIds }, breaching: true, windowEnd: { $gte: windowStart, $lte: windowEnd } }).select('_id sloVersion windowEnd').limit(100).lean(),
-    SyntheticMonitorRunModel.find({ workspaceId, serviceId: { $in: serviceIds }, endpointHealthy: false, completedAt: { $gte: windowStart, $lte: windowEnd } }).select('_id configVersion completedAt').limit(100).lean(),
+    SloEvaluationModel.find({ workspaceId, serviceId: { $in: serviceIds }, sloId: { $in: activeSlos.map((item) => item._id) }, breaching: true, windowEnd: { $gte: windowStart, $lte: windowEnd } }).select('_id sloId sloVersion windowEnd').limit(100).lean(),
+    SyntheticMonitorRunModel.find({ workspaceId, serviceId: { $in: serviceIds }, monitorId: { $in: activeMonitors.map((item) => item._id) }, endpointHealthy: false, completedAt: { $gte: windowStart, $lte: windowEnd } }).select('_id monitorId configVersion completedAt').limit(100).lean(),
     OperationalSignalModel.find({ workspaceId, serviceId: { $in: serviceIds }, detectedAt: { $gte: windowStart, $lte: windowEnd } }).select('_id observationVersion detectedAt').limit(100).lean(),
   ]);
   const sources = [
     ...incidents.map((item) => ({ type: 'incident', id: item._id, revision: item.updatedAt?.toISOString() ?? '1', observedAt: item.updatedAt })),
     ...alerts.map((item) => ({ type: 'alert', id: item._id, revision: item.updatedAt?.toISOString() ?? '1', observedAt: item.updatedAt })),
-    ...slos.map((item) => ({ type: 'slo', id: item._id, revision: String(item.sloVersion), observedAt: item.windowEnd })),
-    ...monitors.map((item) => ({ type: 'monitor', id: item._id, revision: String(item.configVersion), observedAt: item.completedAt })),
+    ...slos.filter((item) => activeSloVersions.get(String(item.sloId)) === item.sloVersion).map((item) => ({ type: 'slo', id: item._id, revision: String(item.sloVersion), observedAt: item.windowEnd })),
+    ...monitors.filter((item) => activeMonitorVersions.get(String(item.monitorId)) === item.configVersion).map((item) => ({ type: 'monitor', id: item._id, revision: String(item.configVersion), observedAt: item.completedAt })),
     ...signals.map((item) => ({ type: 'intelligence', id: item._id, revision: String(item.observationVersion), observedAt: item.detectedAt })),
   ].slice(0, 300);
   const session = await mongoose.startSession();
