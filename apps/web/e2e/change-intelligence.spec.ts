@@ -110,7 +110,7 @@ for (const role of ['owner', 'admin', 'member', 'suspended', 'removed'] as const
     await page.getByRole('button', { name: `Open release ${release.title}` }).click();
     const actionable = role === 'owner' || role === 'admin' || role === 'member';
     await expect(page.getByRole('button', { name: 'Approve' })).toHaveCount(actionable ? 1 : 0);
-    await expect(page.getByRole('button', { name: 'Confirm' })).toHaveCount(actionable ? 1 : 0);
+    await expect(page.getByRole('button', { name: 'Confirm' })).toHaveCount(role === 'owner' || role === 'admin' ? 1 : 0);
     await expect(page.getByText('pre: unknown')).toBeVisible();
   });
 }
