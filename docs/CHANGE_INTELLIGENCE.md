@@ -10,7 +10,7 @@ Policies are immutable workspace versions. Activation and rollback use replica-s
 
 Risk is a deterministic 0–100 sum of ten bounded factors. Unknown SLO, monitor, ownership, or service evidence remains visible as unknown. Factors, weights, contributions, release revision, policy version, explanation, and evaluation time are immutable. Dependency and source queries cap counts at 100.
 
-Pre/post health uses current bounded incident, alert, SLO, and monitor evidence and produces healthy, degraded, or unknown snapshots. It rechecks the release revision before persistence. Correlations are candidates only; temporal proximity is never described as causation and confirmation is human-controlled.
+Pre/post health uses current bounded incident, alert, SLO, and monitor evidence and produces healthy, degraded, or unknown snapshots. It rechecks the release revision before persistence. Pre-deployment evaluation supports lifecycle governance. Terminal post-deployment evaluation is durable only when the active policy's `postHealthRequired` option is enabled; missing values on legacy policies default to enabled. Reconciliation and workers recheck the current active policy, so activation or rollback takes effect without treating obsolete queued work as a successful evaluation. Risk evaluation and terminal correlation remain mandatory regardless of this option. Correlations are candidates only; temporal proximity is never described as causation and confirmation is human-controlled.
 
 The existing automation worker claims risk and health work with stable operation keys, 60-second leases, exponential retry bounded at five minutes, and dead-letter state after five attempts. Completion is fenced by lease owner. Administrative retry only accepts dead work.
 
