@@ -42,7 +42,7 @@ const main = async () => {
           actorId: message.actorId,
           entityId: message.entityId,
           payload: {},
-        });
+        }, message.roles);
       if (message.type === 'hint') {
         publishAutomationHint({
           type: message.eventType,

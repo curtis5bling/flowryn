@@ -77,11 +77,15 @@ try {
     memberA.off(eventType, localListener); memberB.off(eventType, remoteListener); assert.equal(localCount, 1); assert.equal(remoteCount, 1); checks++;
     await noEvent(outsiderB, eventType, async () => command(source, { type: 'publish', eventType, ...base }));
   }
-  for (const eventType of ['change.approvalRequested','change.approvalUpdated','change.policyActivated']) {
-    await oneEvent(ownerB, eventType, () => command(source, { type: 'restricted', eventType, ...base }));
-    await oneEvent(adminB, eventType, () => command(source, { type: 'restricted', eventType, ...base }));
-    await noEvent(memberB, eventType, async () => command(source, { type: 'restricted', eventType, ...base }));
+  for (const eventType of ['change.approvalRequested','change.approvalUpdated']) {
+    const eligibleRoles = ['owner','admin','member'];
+    await oneEvent(ownerB, eventType, () => command(source, { type: 'restricted', eventType, roles: eligibleRoles, ...base }));
+    await oneEvent(adminB, eventType, () => command(source, { type: 'restricted', eventType, roles: eligibleRoles, ...base }));
+    await oneEvent(memberB, eventType, () => command(source, { type: 'restricted', eventType, roles: eligibleRoles, ...base }));
   }
+  await oneEvent(ownerB, 'change.policyActivated', () => command(source, { type: 'restricted', eventType: 'change.policyActivated', ...base }));
+  await oneEvent(adminB, 'change.policyActivated', () => command(source, { type: 'restricted', eventType: 'change.policyActivated', ...base }));
+  await noEvent(memberB, 'change.policyActivated', async () => command(source, { type: 'restricted', eventType: 'change.policyActivated', ...base }));
   const reconnectToken = tokens.member; memberB.disconnect(); const reconnected = await connect(portB, reconnectToken); await join(reconnected, workspace!.id); await oneEvent(reconnected, 'change.queueChanged', () => command(source, { type: 'publish', eventType: 'change.queueChanged', ...base }));
   const rest = await fetch(`http://127.0.0.1:${portB}/api/workspaces/${workspace!.id}/changes/releases`, { headers: { cookie: `accessToken=${reconnectToken}` } }); assert.equal(rest.status, 200); checks++;
   const duplicateHint = { eventId: randomUUID(), timestamp: new Date().toISOString(), type: 'change.riskEvaluated', ...base, payload: {} };

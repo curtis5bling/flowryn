@@ -200,7 +200,7 @@ export const publishNotification = (recipientId: string, event: EventInput) => {
   return message;
 };
 export const publishPrivateRealtimeEvent = (recipientId: string, event: EventInput) => { const message = envelope(event); if (io && !coordinators.get(io)?.available) return message; io?.to(`workspace:${event.workspaceId}:user:${recipientId}`).emit(event.type,message); return message; };
-export const publishRestrictedRealtimeEvent = async (event: EventInput) => { const message=envelope(event); if (!io || !coordinators.get(io)?.available) return message; const admins=await WorkspaceMemberModel.find({workspaceId:event.workspaceId,role:{$in:['owner','admin']},disabled:{$ne:true}}).select('userId').limit(500); for(const admin of admins) io.to(`workspace:${event.workspaceId}:user:${admin.userId}`).emit(event.type,message); return message; };
+export const publishRestrictedRealtimeEvent = async (event: EventInput, roles: Array<'owner'|'admin'|'member'> = ['owner','admin']) => { const message=envelope(event); if (!io || !coordinators.get(io)?.available) return message; const members=await WorkspaceMemberModel.find({workspaceId:event.workspaceId,role:{$in:roles},disabled:{$ne:true}}).select('userId').limit(500); for(const member of members) io.to(`workspace:${event.workspaceId}:user:${member.userId}`).emit(event.type,message); return message; };
 
 export const getPresenceState = async (workspaceId: string, server = io): Promise<PresenceState> =>
   server ? coordinators.get(server)!.presence(workspaceId) : { users: [], lastSeen: {} };
