@@ -86,6 +86,7 @@ export const evaluateReleaseHealth = async (workspaceId: string, releaseId: stri
   if (beforePersist) await beforePersist();
   const session = await mongoose.startSession();
   try { return (await session.withTransaction(async () => {
+    if (phase === 'post') { const activePolicy = await ChangePolicyModel.findOneAndUpdate({ workspaceId, active: true }, { $inc: { __v: 1 } }, { new: true, session }); if (activePolicy?.configuration.postHealthRequired === false) return; }
     const currentRelease = await ChangeReleaseModel.findOne({ workspaceId, _id: releaseId, revision }).session(session); if (!currentRelease) return;
     const currentEnvironment = await DeploymentEnvironmentModel.findOneAndUpdate({ workspaceId, _id: currentRelease.environmentId, active: true }, { $inc: { __v: 1 } }, { new: true, session });
     const ids = [...new Set(currentRelease.serviceIds.map(String))]; const currentServices = await ServiceModel.updateMany({ workspaceId, _id: { $in: ids }, archivedAt: null }, { $inc: { __v: 1 } }, { session, timestamps: false }); const currentProject = currentRelease.projectId ? await ProjectModel.findOneAndUpdate({ workspaceId, _id: currentRelease.projectId, status: 'active' }, { $inc: { __v: 1 } }, { new: true, session, timestamps: false }) : true; if (!currentEnvironment || !currentProject || currentServices.matchedCount !== ids.length) return;
