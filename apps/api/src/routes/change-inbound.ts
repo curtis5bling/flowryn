@@ -1,5 +1,5 @@
 import { deploymentEventSchema, statusIdSchema } from '@flowryn/shared';
-import { raw, Router, type ErrorRequestHandler } from 'express'; import mongoose from 'mongoose'; import { z } from 'zod';
+import { raw, Router, type ErrorRequestHandler } from 'express'; import mongoose from 'mongoose'; import { z } from 'zod/v3';
 
 import { InboundBucketModel, IntegrationModel, WebhookDeliveryModel } from '../automation/models.js'; import { decryptSecret, verifySignature } from '../automation/security.js'; import { ChangeDeploymentHistoryModel, ChangeReleaseModel, DeploymentEnvironmentModel } from '../change/models.js'; import { activePolicyRequiresPostHealth, changeGovernanceAllows, enqueueChangeWork } from '../change/service.js';
 import { ProjectModel } from '../models/Project.js';

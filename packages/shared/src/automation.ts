@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { incidentIdSchema, incidentSeveritySchema, incidentStatusSchema } from './incidents.js';
 import { safeLabelsSchema } from './oncall.js';

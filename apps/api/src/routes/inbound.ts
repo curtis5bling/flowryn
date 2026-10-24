@@ -1,6 +1,6 @@
 import { automationPayloadSchema, inboundAlertSchema, incidentIdSchema } from '@flowryn/shared';
 import { Router, raw, type ErrorRequestHandler } from 'express';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { publishAutomationHint } from '../automation/hints.js';
 import {

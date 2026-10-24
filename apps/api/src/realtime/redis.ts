@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { createAdapter } from '@socket.io/redis-adapter';
 import { Redis } from 'ioredis';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { Coordination, coordinationLog, CoordinationUnavailable, createMemoryCoordination, leaseMs, presenceEntriesSchema, presenceStateSchema, type CoordinationTransport, type PresenceEntry } from './coordination.js';
 

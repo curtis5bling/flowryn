@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { incidentIdSchema, oncallEventNames, realtimeEventNameSchema } from '@flowryn/shared';
 import { Redis } from 'ioredis';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 export const automationHintNames = [
   'automation.ruleCreated',

@@ -8,7 +8,7 @@ import {
   type declareIncidentSchema,
 } from '@flowryn/shared';
 import mongoose, { type ClientSession } from 'mongoose';
-import type { z } from 'zod';
+import type { z } from 'zod/v3';
 
 import { emitDomainEvent, incidentTriggerNames } from '../automation/outbox.js';
 import {

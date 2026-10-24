@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import type { createAdapter } from '@socket.io/redis-adapter';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { authorizationChangeSchema, type Change } from '../auth/revocation.js';
 

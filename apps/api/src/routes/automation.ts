@@ -11,7 +11,7 @@ import {
 } from '@flowryn/shared';
 import { Router, type ErrorRequestHandler, type Request } from 'express';
 import mongoose, { Types, type ClientSession } from 'mongoose';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { publishAutomationHint } from '../automation/hints.js';
 import { automationMetrics } from '../automation/metrics.js';

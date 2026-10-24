@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 export const intelligenceSignalTypes = ['task.overdue', 'task.blocked', 'incident.highSeverity', 'alert.unacknowledged', 'alert.escalating', 'slo.breached', 'slo.budgetDepleted', 'monitor.repeatedFailure', 'automation.deadLetter', 'monitor.deadLetter', 'oncall.coverageGap', 'maintenance.upcoming', 'maintenance.overdue', 'service.ownerlessCritical'] as const;
 export const intelligenceSignalTypeSchema = z.enum(intelligenceSignalTypes);

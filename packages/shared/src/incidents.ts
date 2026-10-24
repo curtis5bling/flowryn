@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 export const incidentIdSchema = z.string().regex(/^[a-f\d]{24}$/i, 'Invalid identifier');
 export const incidentSeveritySchema = z.enum(['sev1', 'sev2', 'sev3', 'sev4']);

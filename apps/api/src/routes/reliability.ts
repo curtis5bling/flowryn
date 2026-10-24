@@ -4,7 +4,7 @@ import { dependencyInputSchema, monitorInputSchema, relationshipInputSchema, rel
 import { Router } from 'express';
 import type { Request } from 'express';
 import mongoose from 'mongoose';
-import type { z } from 'zod';
+import type { z } from 'zod/v3';
 
 import { AutomationRuleModel } from '../automation/models.js';
 import { encryptSecret } from '../automation/security.js';
