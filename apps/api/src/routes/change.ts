@@ -30,6 +30,7 @@ router.post(`${base}/releases`, async (req, res) => {
       const environment = await DeploymentEnvironmentModel.findOneAndUpdate({ workspaceId, _id: input.environmentId, active: true }, { $inc: { __v: 1 } }, { new: true, session });
       assertIncident(environment, 400, 'Invalid or archived release reference');
       const distinctServices = [...new Set(input.serviceIds)];
+      assertIncident(!environment!.serviceIds.length || distinctServices.every((serviceId) => environment!.serviceIds.some((scopedId) => String(scopedId) === serviceId)), 400, 'Invalid or archived release reference');
       const services = await ServiceModel.updateMany({ workspaceId, _id: { $in: distinctServices }, archivedAt: null }, { $inc: { __v: 1 } }, { session, timestamps: false });
       assertIncident(services.matchedCount === distinctServices.length, 400, 'Invalid or archived release reference');
       if (input.projectId) { const project = await ProjectModel.findOneAndUpdate({ workspaceId, _id: input.projectId, status: 'active' }, { $inc: { __v: 1 } }, { new: true, session }); assertIncident(project, 400, 'Invalid or archived release reference'); }
