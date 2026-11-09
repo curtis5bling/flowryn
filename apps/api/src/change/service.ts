@@ -187,7 +187,95 @@ export const expireChangeApprovals = async (now = new Date()) => {
   return result.modifiedCount;
 };
 export const changeSourceCurrent = async (workspaceId: string, releaseId: string, revision: string) => { const release = await ChangeReleaseModel.findOne({ workspaceId, _id: releaseId, revision: Number(revision) }).select('environmentId serviceIds projectId').lean(); if (!release) return false; const [environment, services, project] = await Promise.all([DeploymentEnvironmentModel.exists({ workspaceId, _id: release.environmentId, active: true }), ServiceModel.countDocuments({ workspaceId, _id: { $in: release.serviceIds }, archivedAt: null }), release.projectId ? ProjectModel.exists({ workspaceId, _id: release.projectId, status: 'active' }) : true]); return Boolean(environment) && Boolean(project) && services === new Set(release.serviceIds.map(String)).size; };
-export const scheduleChangeReconciliation = async (now = new Date(), worker = 'change-reconcile') => { const leaseOwner = `${worker}:${randomUUID()}`; const leaseExpiresAt = new Date(now.getTime()+60_000); let checkpoint; try { checkpoint = await ChangeCheckpointModel.findOneAndUpdate({ _id: 'release-cursor', $or: [{ leaseExpiresAt: null }, { leaseExpiresAt: { $lte: now } }] }, { $set: { leaseOwner, leaseExpiresAt }, $setOnInsert: { lastRunAt: new Date(0) } }, { upsert: true, new: true }); } catch (error) { if ((error as { code?: number }).code === 11000) return 0; throw error; } if (!checkpoint || checkpoint.leaseOwner !== leaseOwner) return 0; if (!checkpoint.cursor && checkpoint.lastRunAt && checkpoint.lastRunAt.getTime() > now.getTime() - 60_000) { await ChangeCheckpointModel.updateOne({ _id: checkpoint._id, leaseOwner }, { $unset: { leaseOwner: 1, leaseExpiresAt: 1 } }); return 0; } const filter = checkpoint.cursor ? { _id: { $gt: checkpoint.cursor } } : {}; const releases = await ChangeReleaseModel.find(filter).select('_id workspaceId revision state').sort({ _id: 1 }).limit(100).lean(); const postHealthByWorkspace=new Map<string,boolean>(); let scheduled = 0; let lastScheduled = checkpoint.cursor; releaseLoop: for (const release of releases) { const admitted: unknown[] = []; const workspaceId=String(release.workspaceId); const terminal=['completed','failed','rolled_back'].includes(release.state); admitted.push(await enqueueChangeWork(workspaceId,'risk',release._id,String(release.revision))); if(!terminal) admitted.push(await enqueueChangeWork(workspaceId,'pre-health',release._id,String(release.revision))); else { let required=postHealthByWorkspace.get(workspaceId); if(required===undefined){required=await activePolicyRequiresPostHealth(workspaceId);postHealthByWorkspace.set(workspaceId,required);} if(required) admitted.push(await enqueueChangeWork(workspaceId,'post-health',release._id,String(release.revision))); admitted.push(await enqueueChangeWork(workspaceId,'correlation',release._id,String(release.revision))); } if (admitted.some((item) => item == null)) break releaseLoop; lastScheduled = release._id; scheduled++; } await ChangeCheckpointModel.updateOne({ _id: checkpoint._id, leaseOwner }, { $set: { cursor: lastScheduled ?? null, lastRunAt: now }, $unset: { leaseOwner: 1, leaseExpiresAt: 1 } }); return scheduled; };
+const changeWorkRefreshNeeded = async (workspaceId: string, kind: string, entityId: unknown, revision: string, policyVersion: number, now: Date) => {
+  const operationKey = `${kind}:${entityId}:${revision}`;
+  const work = await ChangeWorkModel.findOne({ workspaceId, operationKey, status: 'completed' }).select('completedAt').lean();
+  if (!work) return false;
+  const freshSince = new Date(now.getTime() - 24 * 60 * 60_000);
+  if (kind === 'risk') {
+    return !(await ChangeRiskModel.exists({ workspaceId, releaseId: entityId, releaseRevision: Number(revision), policyVersion, $or: [{ lastRefreshedAt: { $gte: freshSince } }, { evaluatedAt: { $gte: freshSince } }] }));
+  }
+  if (kind === 'pre-health' || kind === 'post-health') {
+    const phase = kind === 'pre-health' ? 'pre' : 'post';
+    return !(await ChangeHealthModel.exists({ workspaceId, releaseId: entityId, releaseRevision: Number(revision), phase, $or: [{ lastRefreshedAt: { $gte: freshSince } }, { evaluatedAt: { $gte: freshSince } }] }));
+  }
+  if (kind === 'correlation') return !work.completedAt || work.completedAt < freshSince;
+  return false;
+};
+
+export const scheduleChangeReconciliation = async (now = new Date(), worker = 'change-reconcile') => {
+  const leaseOwner = `${worker}:${randomUUID()}`;
+  const leaseExpiresAt = new Date(now.getTime() + 60_000);
+  let checkpoint;
+  try {
+    checkpoint = await ChangeCheckpointModel.findOneAndUpdate(
+      { _id: 'release-cursor', $or: [{ leaseExpiresAt: null }, { leaseExpiresAt: { $lte: now } }] },
+      { $set: { leaseOwner, leaseExpiresAt }, $setOnInsert: { lastRunAt: new Date(0) } },
+      { upsert: true, new: true },
+    );
+  } catch (error) {
+    if ((error as { code?: number }).code === 11000) return 0;
+    throw error;
+  }
+  if (!checkpoint || checkpoint.leaseOwner !== leaseOwner) return 0;
+  if (!checkpoint.cursor && checkpoint.lastRunAt && checkpoint.lastRunAt.getTime() > now.getTime() - 60_000) {
+    await ChangeCheckpointModel.updateOne({ _id: checkpoint._id, leaseOwner }, { $unset: { leaseOwner: 1, leaseExpiresAt: 1 } });
+    return 0;
+  }
+
+  const filter = checkpoint.cursor ? { _id: { $gt: checkpoint.cursor } } : {};
+  const releases = await ChangeReleaseModel.find(filter).select('_id workspaceId revision state').sort({ _id: 1 }).limit(100).lean();
+  const policies = new Map<string, { version: number; postHealthRequired: boolean }>();
+  let scheduled = 0;
+  let lastScheduled = checkpoint.cursor;
+  let blocked = false;
+
+  for (const release of releases) {
+    const workspaceId = String(release.workspaceId);
+    const releaseId = String(release._id);
+    const revision = String(release.revision);
+    if (!(await changeSourceCurrent(workspaceId, releaseId, revision))) {
+      lastScheduled = release._id;
+      scheduled++;
+      continue;
+    }
+
+    let policy = policies.get(workspaceId);
+    if (!policy) {
+      const active = await ChangePolicyModel.findOne({ workspaceId, active: true }).select('version configuration.postHealthRequired').lean();
+      policy = { version: active?.version ?? 1, postHealthRequired: active?.configuration?.postHealthRequired !== false };
+      policies.set(workspaceId, policy);
+    }
+
+    const terminal = ['completed', 'failed', 'rolled_back'].includes(release.state);
+    const riskRefresh = await changeWorkRefreshNeeded(workspaceId, 'risk', release._id, revision, policy.version, now);
+    const admitted: unknown[] = [await enqueueChangeWork(workspaceId, 'risk', release._id, revision, riskRefresh)];
+    if (!terminal) {
+      const healthRefresh = await changeWorkRefreshNeeded(workspaceId, 'pre-health', release._id, revision, policy.version, now);
+      admitted.push(await enqueueChangeWork(workspaceId, 'pre-health', release._id, revision, healthRefresh));
+    } else {
+      if (policy.postHealthRequired) {
+        const healthRefresh = await changeWorkRefreshNeeded(workspaceId, 'post-health', release._id, revision, policy.version, now);
+        admitted.push(await enqueueChangeWork(workspaceId, 'post-health', release._id, revision, healthRefresh));
+      }
+      const correlationRefresh = await changeWorkRefreshNeeded(workspaceId, 'correlation', release._id, revision, policy.version, now);
+      admitted.push(await enqueueChangeWork(workspaceId, 'correlation', release._id, revision, correlationRefresh));
+    }
+    if (admitted.some((item) => item == null)) {
+      blocked = true;
+      break;
+    }
+    lastScheduled = release._id;
+    scheduled++;
+  }
+
+  const pageComplete = !blocked && releases.length < 100;
+  await ChangeCheckpointModel.updateOne(
+    { _id: checkpoint._id, leaseOwner },
+    { $set: { cursor: pageComplete ? null : lastScheduled ?? null, lastRunAt: pageComplete ? now : checkpoint.lastRunAt }, $unset: { leaseOwner: 1, leaseExpiresAt: 1 } },
+  );
+  return scheduled;
+};
 type ChangeRefreshEvent = { workspaceId: string; actorId: string; entityId: string; type: 'change.riskEvaluated'|'change.healthUpdated'|'change.correlationUpdated'; payload: Record<string, never> };
 const publishChangeRefresh = (event: ChangeRefreshEvent) => publishAutomationHint({ workspaceId: event.workspaceId, actorId: event.actorId, entityId: event.entityId, type: event.type });
 export const processChangeWork = async (now = new Date(), worker = 'change-worker', controlledExecution?: (job: { kind?: string | null; entityId: unknown; sourceRevision?: string | null }) => Promise<void>, publish: (event: ChangeRefreshEvent) => unknown = publishChangeRefresh) => {
