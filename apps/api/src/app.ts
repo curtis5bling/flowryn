@@ -8,6 +8,8 @@ import { CoordinationUnavailable, RevocationIncomplete } from './realtime/coordi
 import { realtimeAvailable } from './realtime/gateway.js';
 import authRouter from './routes/auth.js';
 import automationRouter from './routes/automation.js';
+import changeInboundRouter from './routes/change-inbound.js';
+import changeRouter from './routes/change.js';
 import collaborationRouter from './routes/collaboration.js';
 import inboundRouter from './routes/inbound.js';
 import incidentsRouter from './routes/incidents.js';
@@ -40,6 +42,7 @@ export const createApp = () => {
   app.use(cookieParser());
   app.use('/api/webhooks', inboundRouter);
   app.use('/api/webhooks/reliability', reliabilityInboundRouter);
+  app.use('/api/webhooks/changes', changeInboundRouter);
   app.use(express.json({ limit: '2mb' }));
   app.get('/api/ready', (_request, response) => {
     const ready = realtimeAvailable();
@@ -62,6 +65,7 @@ export const createApp = () => {
   app.use('/api/workspaces', automationRouter);
   app.use('/api/workspaces', incidentsRouter);
   app.use('/api/workspaces', intelligenceRouter);
+  app.use('/api/workspaces', changeRouter);
   app.use('/api/workspaces', collaborationRouter);
   app.use('/api/workspaces', projectsRouter);
   app.use('/api/workspaces', workspacesRouter);

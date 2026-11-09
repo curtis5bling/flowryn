@@ -84,6 +84,11 @@ export const bindRealtime = (
       'intelligence-policy',
       'intelligence-policy-history',
       'intelligence-metrics',
+      'changes-environments',
+      'changes-releases',
+      'changes-release',
+      'changes-policies',
+      'changes-metrics',
     ]) {
       void queryClient.invalidateQueries({
         queryKey: [key, workspaceId],

@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 export const appName = 'Flowryn';
 export const appDescription = 'Intelligent Work Orchestration';
@@ -276,6 +276,15 @@ export const realtimeEventNameSchema = z.enum([
   'intelligence.recommendationUpdated',
   'intelligence.policyActivated',
   'intelligence.queueChanged',
+  'change.releaseCreated',
+  'change.deploymentUpdated',
+  'change.riskEvaluated',
+  'change.approvalRequested',
+  'change.approvalUpdated',
+  'change.healthUpdated',
+  'change.correlationUpdated',
+  'change.policyActivated',
+  'change.queueChanged',
 ]);
 export const realtimeEventSchema = z.object({
   eventId: z.string(),
@@ -329,3 +338,4 @@ export * from './oncall.js';
 export * from './status.js';
 export * from './reliability.js';
 export * from './intelligence.js';
+export * from './change.js';

@@ -2,13 +2,11 @@ import { randomUUID } from 'node:crypto';
 
 import { createAdapter } from '@socket.io/redis-adapter';
 import { Redis } from 'ioredis';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { Coordination, coordinationLog, CoordinationUnavailable, createMemoryCoordination, leaseMs, presenceEntriesSchema, presenceStateSchema, type CoordinationTransport, type PresenceEntry } from './coordination.js';
 
-const channel = 'flowryn:authorization:v2';
 const probeSchema = z.object({ probe: z.string().uuid() }).strict();
-const participantKey = 'flowryn:api-instances:v2';
 const participantScript = `local t = redis.call('TIME'); local now = tonumber(t[1])*1000+math.floor(tonumber(t[2])/1000)
 redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', now)
 if ARGV[1] ~= '' then redis.call('ZADD', KEYS[1], now+15000, ARGV[1]) end
@@ -49,7 +47,14 @@ export class RedisCoordinationTransport implements CoordinationTransport {
   private readonly health = new Set<(healthy: boolean) => void>();
   private readonly probes = new Map<string, () => void>();
   private readonly adapterSubscriptions = new Map<string, { method: 'subscribe' | 'psubscribe'; channel: string }>();
-  constructor(url: string) {
+  private readonly prefix: string;
+  private readonly channel: string;
+  private readonly participantKey: string;
+  constructor(url: string, prefix = process.env.REDIS_KEY_PREFIX ?? 'flowryn') {
+    if (!/^[a-zA-Z0-9:_-]{1,100}$/.test(prefix)) throw new Error('Invalid Redis key prefix');
+    this.prefix = prefix;
+    this.channel = `${prefix}:authorization:v2`;
+    this.participantKey = `${prefix}:api-instances:v2`;
     this.publisher = new Redis(url, { lazyConnect: true, enableOfflineQueue: false, maxRetriesPerRequest: 1, connectTimeout: 2000, commandTimeout: 1500, retryStrategy: (times) => Math.min(times * 200, 2000) });
     this.subscriber = this.publisher.duplicate();
     for (const client of [this.publisher, this.subscriber]) {
@@ -58,7 +63,7 @@ export class RedisCoordinationTransport implements CoordinationTransport {
       client.on('end', this.onFailure);
     }
     this.subscriber.on('message', this.onMessageReceived);
-    this.adapter = createAdapter(this.adapterClient(this.publisher), this.adapterClient(this.subscriber), { key: 'flowryn:socket', publishOnSpecificResponseChannel: true, requestsTimeout: 2000 });
+    this.adapter = createAdapter(this.adapterClient(this.publisher), this.adapterClient(this.subscriber), { key: `${prefix}:socket`, publishOnSpecificResponseChannel: true, requestsTimeout: 2000 });
   }
   // The official adapter issues some Redis commands without awaiting their
   // promises. Catch those at its boundary; control-plane commands still reject.
@@ -85,7 +90,7 @@ export class RedisCoordinationTransport implements CoordinationTransport {
   }
   private onFailure = () => { this.setHealth(false); };
   private onMessageReceived = (name: string, message: string) => {
-    if (name !== channel) return;
+    if (name !== this.channel) return;
     let data: unknown;
     try { data = JSON.parse(message); } catch { coordinationLog('invalid_coordination_payload'); return; }
     const probe = probeSchema.safeParse(data);
@@ -107,10 +112,11 @@ export class RedisCoordinationTransport implements CoordinationTransport {
       throw new Error('Required Redis coordination is unavailable; check REDIS_URL and Redis connectivity');
     }
   }
+  async ensureReady() { await this.probe(); }
   private probe() {
     this.probing ??= (async () => {
       if (this.closed || this.publisher.status !== 'ready' || this.subscriber.status !== 'ready') { this.onFailure(); return; }
-      await this.subscriber.subscribe(channel);
+      await this.subscriber.subscribe(this.channel);
       for (const subscription of this.adapterSubscriptions.values()) await this.subscriber[subscription.method](subscription.channel);
       await this.publisher.ping();
       const probe = randomUUID();
@@ -120,8 +126,8 @@ export class RedisCoordinationTransport implements CoordinationTransport {
         timeout = setTimeout(() => reject(new CoordinationUnavailable()), 1500);
       });
       try {
-        await Promise.all([received, this.publisher.publish(channel, JSON.stringify({ probe }))]);
-        await this.publisher.eval(participantScript, 1, participantKey, this.instanceId);
+        await Promise.all([received, this.publisher.publish(this.channel, JSON.stringify({ probe }))]);
+        await this.publisher.eval(participantScript, 1, this.participantKey, this.instanceId);
         this.setHealth(true);
       } finally { clearTimeout(timeout); this.probes.delete(probe); }
     })().finally(() => { this.probing = undefined; });
@@ -129,11 +135,11 @@ export class RedisCoordinationTransport implements CoordinationTransport {
   }
   async publish(message: string) {
     if (!this.available) throw new CoordinationUnavailable();
-    await this.publisher.publish(channel, message);
+    await this.publisher.publish(this.channel, message);
   }
   async participants() {
     if (!this.available) throw new CoordinationUnavailable();
-    return z.array(z.string().uuid()).parse(await this.publisher.eval(participantScript, 1, participantKey, ''));
+    return z.array(z.string().uuid()).parse(await this.publisher.eval(participantScript, 1, this.participantKey, ''));
   }
   async writePresence(instanceId: string, previous: PresenceEntry[], current: PresenceEntry[]) {
     if (!this.available) throw new CoordinationUnavailable();
@@ -144,13 +150,13 @@ export class RedisCoordinationTransport implements CoordinationTransport {
     for (const workspace of workspaces) {
       const oldUsers = [...new Set(previous.filter((entry) => entry.workspaceId === workspace).map((entry) => entry.userId))];
       const users = [...new Set(current.filter((entry) => entry.workspaceId === workspace).map((entry) => entry.userId))];
-      await this.publisher.eval(writePresenceScript, 2, `flowryn:presence:{${workspace}}`, `flowryn:last-seen:{${workspace}}`, instanceId, JSON.stringify(oldUsers), JSON.stringify(users), leaseMs);
+      await this.publisher.eval(writePresenceScript, 2, `${this.prefix}:presence:{${workspace}}`, `${this.prefix}:last-seen:{${workspace}}`, instanceId, JSON.stringify(oldUsers), JSON.stringify(users), leaseMs);
     }
   }
   async presence(workspace: string) {
     if (!this.available) throw new CoordinationUnavailable();
     z.string().regex(/^[a-f\d]{24}$/i).parse(workspace);
-    const raw = z.tuple([z.array(z.string()), z.array(z.string())]).parse(await this.publisher.eval(readPresenceScript, 2, `flowryn:presence:{${workspace}}`, `flowryn:last-seen:{${workspace}}`));
+    const raw = z.tuple([z.array(z.string()), z.array(z.string())]).parse(await this.publisher.eval(readPresenceScript, 2, `${this.prefix}:presence:{${workspace}}`, `${this.prefix}:last-seen:{${workspace}}`));
     const users = raw[0].map((entry) => {
       z.string().regex(/^[a-f\d]{24}:/i).parse(entry);
       z.string().uuid().parse(entry.slice(25));
@@ -169,7 +175,7 @@ export class RedisCoordinationTransport implements CoordinationTransport {
     // Release a pending round-trip before closing the connections.
     this.probes.forEach((resolve) => resolve());
     await this.probing?.catch(() => {});
-    try { if (this.publisher.status === 'ready') await this.publisher.zrem(participantKey, this.instanceId); } catch { coordinationLog('participant_cleanup_deferred_to_lease'); }
+    try { if (this.publisher.status === 'ready') await this.publisher.zrem(this.participantKey, this.instanceId); } catch { coordinationLog('participant_cleanup_deferred_to_lease'); }
     await Promise.all([this.publisher, this.subscriber].map(async (client) => {
       try { if (client.status === 'ready') await client.quit(); } catch { /* Force-close below. */ }
       client.disconnect();

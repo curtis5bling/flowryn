@@ -6,7 +6,7 @@ import { isIP } from 'node:net';
 import type { sliBatchSchema } from '@flowryn/shared';
 import mongoose from 'mongoose';
 import type { ClientSession } from 'mongoose';
-import type { z } from 'zod';
+import type { z } from 'zod/v3';
 
 import { publishAutomationHint } from '../automation/hints.js';
 import { emitDomainEvent } from '../automation/outbox.js';

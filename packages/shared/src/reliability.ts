@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 const id = z.string().regex(/^[a-f\d]{24}$/i);
 const text = (max: number) => z.string().trim().max(max);

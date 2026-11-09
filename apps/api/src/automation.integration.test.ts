@@ -1335,6 +1335,7 @@ describe('integration credentials, signed ingestion and deliveries', () => {
     expect(await WebhookDeliveryModel.countDocuments({ direction: 'inbound' })).toBe(1);
   });
   it('rejects expired, malformed, oversized, unconfigured and rate-limited alerts without work', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(Math.floor(Date.now() / 60000) * 60000 + 10_000);
     const f = await fixture();
     const result = await createIntegration(f);
     const id = result.body.integration.id as string;

@@ -11,6 +11,7 @@ import {
 } from '@flowryn/shared';
 import mongoose, { type ClientSession } from 'mongoose';
 
+import { processChangeWork } from '../change/service.js';
 import {
   assertIncident,
   executeIncident,
@@ -709,6 +710,7 @@ export class AutomationWorker {
   private reliabilityRunning = false;
   private reliabilitySloRunning = false;
   private intelligenceRunning = false;
+  private changeRunning = false;
   ready = false;
   constructor(
     readonly concurrency = 4,
@@ -778,6 +780,15 @@ export class AutomationWorker {
                   return processIntelligenceWork(new Date(), this.id)
                     .then(() => undefined)
                     .finally(() => { this.intelligenceRunning = false; });
+                },
+          async () =>
+            this.changeRunning
+              ? null
+              : () => {
+                  this.changeRunning = true;
+                  return processChangeWork(new Date(), this.id)
+                    .then(() => undefined)
+                    .finally(() => { this.changeRunning = false; });
                 },
         ];
         let execute: (() => Promise<void>) | null = null;

@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { incidentIdSchema, incidentSeveritySchema, incidentStatusSchema } from './incidents.js';
 import { safeLabelsSchema } from './oncall.js';
@@ -235,7 +235,7 @@ export const integrationInputSchema = z
     type: z.literal('genericWebhook'),
     status: z.enum(['active', 'disabled']),
     endpoint: z.string().url().max(2048).optional(),
-    inboundEvents: z.array(z.enum(['alert.received', 'sli.received'])).max(2),
+    inboundEvents: z.array(z.enum(['alert.received', 'sli.received', 'deployment.received'])).max(3),
     outboundEvents: z.array(automationTriggerSchema).max(automationTriggerSchema.options.length),
   })
   .strict();

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import type { createAdapter } from '@socket.io/redis-adapter';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { authorizationChangeSchema, type Change } from '../auth/revocation.js';
 
@@ -36,6 +36,7 @@ export interface CoordinationTransport {
   writePresence(instanceId: string, previous: PresenceEntry[], current: PresenceEntry[]): Promise<void>;
   presence(workspaceId: string): Promise<PresenceState>;
   close(): Promise<void>;
+  ensureReady?(): Promise<void>;
 }
 
 export class Coordination {
@@ -60,6 +61,7 @@ export class Coordination {
   }
   get available() { return !this.closed && this.healthy && this.transport.available; }
   get adapter() { return this.transport.adapter; }
+  async ensureReady() { await this.transport.ensureReady?.(); this.assertAvailable(); }
   private setHealth(healthy: boolean) {
     if (this.closed || this.healthy === healthy) return;
     this.healthy = healthy;

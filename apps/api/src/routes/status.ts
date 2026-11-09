@@ -14,7 +14,7 @@ import {
 } from '@flowryn/shared';
 import { Router, type Request } from 'express';
 import mongoose from 'mongoose';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { assertIncident, IncidentError } from '../incidents/service.js';
 import { requireAuth, requireWorkspaceRole } from '../middleware/auth.js';

@@ -2,7 +2,7 @@ import { intelligenceMetricsQuerySchema, intelligencePolicyInputSchema, intellig
 import { Router } from 'express';
 import type { Request } from 'express';
 import mongoose from 'mongoose';
-import type { z } from 'zod';
+import type { z } from 'zod/v3';
 
 import { IncidentError, assertIncident } from '../incidents/service.js';
 import { IntelligenceEvaluationModel, IntelligenceFeedbackModel, IntelligencePolicyModel, IntelligenceRecommendationModel, IntelligenceScoreSnapshotModel, OperationalSignalModel } from '../intelligence/models.js';

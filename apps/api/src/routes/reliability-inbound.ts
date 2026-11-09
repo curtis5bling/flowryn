@@ -1,7 +1,7 @@
 import { signedSliBatchSchema, statusIdSchema } from '@flowryn/shared';
 import { raw, Router, type ErrorRequestHandler } from 'express';
 import mongoose from 'mongoose';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { InboundBucketModel, IntegrationModel, WebhookDeliveryModel } from '../automation/models.js';
 import { decryptSecret, verifySignature } from '../automation/security.js';

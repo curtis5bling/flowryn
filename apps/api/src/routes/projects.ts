@@ -11,7 +11,7 @@ import {
 } from '@flowryn/shared';
 import { Router, type ErrorRequestHandler } from 'express';
 import { Types } from 'mongoose';
-import { ZodError } from 'zod';
+import { ZodError } from 'zod/v3';
 
 import { executeTask } from '../automation/tasks.js';
 import { IncidentError } from '../incidents/service.js';
