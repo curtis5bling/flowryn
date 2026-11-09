@@ -14,6 +14,6 @@ Pre/post health uses current bounded incident, alert, SLO, and monitor evidence 
 
 The existing automation worker claims risk and health work with stable operation keys, 60-second leases, exponential retry bounded at five minutes, and dead-letter state after five attempts. Completion is fenced by lease owner. Administrative retry only accepts dead work.
 
-Metrics use a maximum 366-day cohort. Empty cohorts return `insufficientData`; rates are `null` when their denominator is zero. Lists use stable `_id` cursors and at most 100 records.
+Metrics use a maximum 366-day cohort. `cohort.releaseCount` counts release creation in the selected range; deployment totals count each release once by its latest deployment-history state in that range, excluding planned and cancelled records. Empty cohorts return `insufficientData`; rates are `null` when their denominator is zero. Lists use stable `_id` cursors and at most 100 records.
 
 Production requires the existing replica-set MongoDB, Redis realtime coordination, automation worker, and `AUTOMATION_ENCRYPTION_KEYS`. Integrations must explicitly allow `deployment.received` and rotate secrets using the existing integration API.
